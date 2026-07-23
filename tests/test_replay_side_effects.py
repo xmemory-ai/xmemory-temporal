@@ -4,12 +4,15 @@
 the workflow is replayed from history on each step — the condition under which a
 non-replay-safe implementation duplicates its side effects.
 
-Two complementary assertions per workflow:
+Two assertions per workflow:
 
-* **history-level** — N logical memory ops produce exactly N
-  ``ActivityTaskScheduled`` events. This is what the guide names.
-* **ledger-level** — the injected fake actually saw each write exactly once. A
-  naive event counter can be fooled; the ledger cannot.
+* **history-level (authoritative)** — N logical memory ops produce exactly N
+  ``ActivityTaskScheduled`` events. This is the pattern Temporal's guide names,
+  and it is retry-independent: each intended call is one scheduled event no
+  matter how many times the activity retries or the workflow replays.
+* **ledger-level (cross-check)** — the injected fake actually saw each write
+  exactly once. On its own an in-memory counter can be inflated by activity
+  retries, so the history count above is authoritative; the ledger complements it.
 
 Plus a **sensitivity control**: the same forced-replay harness applied to a
 workflow that legitimately writes twice reports exactly two. That is what makes
