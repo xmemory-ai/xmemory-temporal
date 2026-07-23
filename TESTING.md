@@ -53,11 +53,14 @@ Each module verified in isolation, no worker involved.
 
 - **`test_replay_side_effects.py`** — runs the worker with
   `max_cached_workflows=0`, which evicts the workflow after every task and forces
-  a full replay from history. It asserts at two levels: the **history level**
-  (N logical operations → exactly N `ActivityTaskScheduled` events) and the
-  **ledger level** (the fake saw each logical write exactly once). A deliberate
-  **sensitivity control** (a double-write workflow) proves the harness reports
-  *two* when there are two — so the "exactly one" assertions can actually fail.
+  a full replay from history. The **primary** assertion is at the **history
+  level** — N logical operations produce exactly N `ActivityTaskScheduled`
+  events, the retry-independent pattern Temporal's guide names (each intended call
+  is one scheduled event, regardless of retries or replays). A complementary
+  **ledger-level** cross-check confirms the injected fake saw each logical write
+  exactly once. A deliberate **sensitivity control** (a double-write workflow)
+  proves the harness reports *two* when there are two — so the "exactly one"
+  assertions can actually fail.
 
 ### 4. Replayer
 
@@ -77,9 +80,9 @@ Each module verified in isolation, no worker involved.
 
 `tests/fakes.py::FakeXmemoryInstance` implements the same narrow protocol the
 plugin depends on and records every call as a `CallRecord`. It is scriptable
-(`fail_write_times(n, exc)`, `status_sequence([...])`) and is the side-effect
-ledger the replay test asserts against — so its behavior, not any mock library,
-is the source of truth. Because the instance is *injected* through the plugin,
+(`fail_write_times(n, exc)`, `status_sequence([...])`) and provides the replay
+test's complementary ledger cross-check (the authoritative assertion there is the
+`ActivityTaskScheduled` event count). Because the instance is *injected* through the plugin,
 no test needs monkeypatching.
 
 ## Running the tests
