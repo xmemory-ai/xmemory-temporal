@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   test:
+    name: Python ${{ matrix.python }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
