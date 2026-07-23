@@ -1,0 +1,76 @@
+[project]
+name = "xmemory-temporal"
+version = "0.1.0"
+description = "Temporal plugin for xmemory — durable agent memory as Temporal Activities"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # `SimplePlugin` and `execute_activity(..., summary=)` are the floor.
+    # Capped below 2 because the plugin surface is young and still moving.
+    "temporalio>=1.30,<2",
+    # 0.11 is the first MIT release (matches this package's license) and the one
+    # that dropped TRIAL_ENDED from the documented error contract.
+    "xmemory-ai>=0.11",
+]
+
+# NOTE: `httpx` and `pydantic` arrive transitively via `xmemory-ai`. Do not pin
+# them here — independent pins invite conflicts with the SDK's own resolution.
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pyright",
+    "ruff",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["xmemory_temporal*"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
+pythonVersion = "3.10"
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportImportCycles = true
+reportImplicitOverride = "error"
+
+[tool.pytest.ini_options]
+# Deliberately no --testmon: the root addopts are root-only and testmon state
+# would be meaningless in this standalone package.
+addopts = ["-v"]
+asyncio_mode = "auto"
+asyncio_default_test_loop_scope = "session"
+cache_dir = ".pytest_cache"
+testpaths = ["tests"]
+markers = [
+    "live: requires a real xmemory backend and API key (XMEM_API_KEY / XMEM_INSTANCE_ID)",
+]
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-line-length = "dynamic"

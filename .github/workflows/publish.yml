@@ -1,0 +1,33 @@
+name: publish
+
+# Publishes xmemory-temporal to PyPI when a GitHub Release is published.
+# No token is required today — add one before the first release (see below).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # PEP 740 attestations (provenance) + optional Trusted Publishing
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    # Configure this environment's protection rules / Trusted Publishing on PyPI.
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # TOKEN: set the PYPI_API_TOKEN secret before the first release.
+          # Alternatively, configure PyPI Trusted Publishing for this repo +
+          # `pypi` environment and DELETE the `password:` line — OIDC then
+          # authenticates with no stored token.
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          # Provenance attestations are generated automatically (id-token: write).
