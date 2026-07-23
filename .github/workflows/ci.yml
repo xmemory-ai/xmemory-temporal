@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor (3.10, matching xmemory-ai) through current.
+        python: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: Install (locked)
+        run: uv sync --dev
+      - name: Lint
+        run: uv run ruff check src tests examples
+      - name: Format check
+        run: uv run ruff format --check src tests examples
+      - name: Type check
+        run: uv run pyright src tests examples
+      - name: Test (no live backend)
+        # The time-skipping tests download a Temporal test-server binary at
+        # runtime; the `live`-marked e2e is skipped without XMEM_API_KEY.
+        run: uv run pytest -m "not live"
