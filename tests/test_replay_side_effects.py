@@ -6,13 +6,15 @@ non-replay-safe implementation duplicates its side effects.
 
 Two assertions per workflow:
 
-* **history-level (authoritative)** — N logical memory ops produce exactly N
-  ``ActivityTaskScheduled`` events. This is the pattern Temporal's guide names,
-  and it is retry-independent: each intended call is one scheduled event no
-  matter how many times the activity retries or the workflow replays.
-* **ledger-level (cross-check)** — the injected fake actually saw each write
-  exactly once. On its own an in-memory counter can be inflated by activity
-  retries, so the history count above is authoritative; the ledger complements it.
+* **history-level** — N logical memory ops produce exactly N
+  ``ActivityTaskScheduled`` events, the retry-independent pattern Temporal's
+  guide names (each intended call is one scheduled event no matter how many times
+  the activity retries or the workflow replays). This is exact for the single /
+  read-then-write / double-write workflows.
+* **ledger-level** — the injected fake saw each write exactly once. For the
+  durable-write workflow the poll loop makes the scheduled-event total variable,
+  so there the history count is only a lower bound (``>= 1``) and the ledger's
+  ``write_async == 1`` is the exact, enqueue-protecting assertion.
 
 Plus a **sensitivity control**: the same forced-replay harness applied to a
 workflow that legitimately writes twice reports exactly two. That is what makes
