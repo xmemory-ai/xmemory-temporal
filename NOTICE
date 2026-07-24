@@ -1,0 +1,27 @@
+xmemory Temporal integration
+Copyright (c) xmemory Inc.
+
+This product is licensed under the MIT License (see LICENSE). The following
+notices supplement — but do not modify — that license.
+
+SCOPE. The MIT license covers only this Temporal integration — the source code
+in this directory (the `xmemory-temporal` and `@xmemory/temporal` plugin
+packages), which is a thin client over the xmemory API wired into Temporal.
+
+PROPRIETARY SERVICE. The xmemory service that this integration talks to, and the
+underlying technology behind it — including the xmemory backend, its memory
+engine, schemas, extraction and reader models, APIs, and hosted
+infrastructure — are proprietary to xmemory Inc. and are NOT licensed under the
+MIT license. Nothing in this license grants any right to access, copy, reverse
+engineer, reimplement, or create derivative works of the xmemory service or its
+underlying technology. Use of the service is governed by the Terms & Conditions
+at https://xmemory.ai/terms-and-conditions.html and the Privacy Policy at
+https://xmemory.ai/privacy-policy.html, and requires valid credentials issued by
+xmemory Inc.
+
+TRADEMARKS. The "xmemory" name and logo are trademarks of xmemory Inc. The MIT
+license does not grant permission to use them, except as required for reasonable
+and customary use in describing the origin of the Software. "Temporal" is a
+trademark of Temporal Technologies, Inc.; this is an independent, unofficial
+integration and is not affiliated with, endorsed by, or sponsored by Temporal
+Technologies, Inc.
