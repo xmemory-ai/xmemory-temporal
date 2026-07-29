@@ -1,27 +1,15 @@
 """Opt-in auto-capture of activity results into xmemory.
 
-Off by default. Enable with ``XmemoryPlugin(config, auto_capture=AutoCaptureConfig(...))``.
+Off by default; enable with ``XmemoryPlugin(config, auto_capture=...)``.
 
-**Why an activity interceptor and not a workflow interceptor.** A
-``WorkflowInboundInterceptor`` runs *inside workflow context* and is re-executed
-on every replay; the moment it performs I/O — or reaches for the client — it
-breaks determinism, and it typically appears to work in dev, diverging only
-under cache eviction or a worker restart. That is exactly the bug class the
-partner review targets. An ``ActivityInboundInterceptor`` runs outside the
-replay path entirely, so the hazard does not exist here.
+An **activity** interceptor, not a workflow one: a workflow interceptor re-runs
+on every replay, so any I/O there breaks determinism, usually only visible
+under cache eviction or a worker restart. Activity interceptors sit outside the
+replay path.
 
-Four guardrails, all mandatory:
-
-* a user-supplied ``project`` decides what (if anything) to remember — returning
-  ``None`` skips capture, so nothing is written without an explicit opt-in;
-* ``sample_rate`` bounds fan-out, since a chatty agent can otherwise turn one
-  memory write into hundreds and burn quota invisibly;
-* capture is an **enqueue** (``write_async``) bounded by a short timeout well
-  below the wrapped activity's budget — a full synchronous write here would add
-  its latency to the user activity's ``start_to_close`` and could time it out,
-  re-running an already-successful (possibly non-idempotent) activity;
-* a capture failure — error *or* timeout — is swallowed: remembering something
-  must never fail, or slow, the user's actual activity.
+Four guardrails: a user-supplied ``project`` decides what to remember (``None``
+skips); ``sample_rate`` bounds fan-out; capture is an enqueue bounded well below
+the wrapped activity's budget; and a capture failure never fails that activity.
 """
 
 import asyncio
@@ -44,10 +32,8 @@ from xmemory_temporal.dto import WriteInput
 
 logger = logging.getLogger(__name__)
 
-# Activity names this package itself registers — never capture our own writes,
-# or auto-capture would recurse. NOTE this also silently skips any of the USER's
-# own activities named with this prefix; a user activity called "xmemory_sync"
-# would not be auto-captured. Documented in the README auto-capture section.
+# Never capture our own writes, or capture would recurse. This also skips a
+# user activity named `xmemory_*`. See the README's auto-capture caveat.
 _OWN_ACTIVITY_PREFIX = "xmemory_"
 
 
@@ -62,14 +48,11 @@ class AutoCaptureConfig:
     """
 
     project: Callable[[str, Any], str | None]
-    # Fraction of eligible activities to capture, in [0.0, 1.0]. Defaults to 1.0
-    # (capture every eligible activity) — sampling is opt-in, so set below 1.0 to
-    # bound fan-out / quota on a chatty agent. Deterministic per activity (a
-    # stable hash of the activity id), not random, so a retry samples the same way.
+    # Fraction of eligible activities to capture. Defaults to 1.0 (sampling is
+    # opt-in). Deterministic per activity id, so a retry samples the same way.
     sample_rate: float = 1.0
     extraction_logic: str = "fast"
-    # Hard cap on how long a capture enqueue may add to the wrapped activity.
-    # Kept small — capture is best-effort and must not eat the activity's budget.
+    # Cap on what a capture enqueue may add to the wrapped activity's budget.
     capture_timeout_seconds: float = 5.0
 
 
@@ -146,7 +129,7 @@ class _AutoCaptureActivityInbound(ActivityInboundInterceptor):
 def sampling_bucket(activity_id: str) -> float:
     """Stable [0, 1) bucket for an activity id.
 
-    Uses ``zlib.crc32``, NOT the builtin ``hash()`` — ``hash()`` of a str is
+    Uses ``zlib.crc32`` rather than the builtin ``hash()``, whose value for a str is
     salted per process (``PYTHONHASHSEED``), so across a multi-worker fleet a
     retry on another worker would land in a different bucket and flip the
     sampling decision. crc32 is process-stable everywhere. (The TS port uses a

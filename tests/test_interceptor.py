@@ -85,7 +85,7 @@ async def test_own_write_activity_is_not_captured(env: WorkflowEnvironment) -> N
 
 
 def test_sampling_bucket_is_stable_and_crc32_based() -> None:
-    # F4: the sampling bucket must be stable across processes (not the
+    # The sampling bucket must be stable across processes (not the
     # process-salted builtin hash()), so a retry on another worker samples the
     # same way. Pin it to the exact crc32 formula.
     import zlib
