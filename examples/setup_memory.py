@@ -28,8 +28,10 @@ def main() -> None:
             raise RuntimeError("no xmemory cluster is available for this account")
         cluster_id = clusters[0].id
 
-        # Generate a schema from a description. NOTE the primary-key instruction:
-        # `name` as PK is what makes repeated writes about a person idempotent.
+        # Generate a schema from a description. The primary-key instruction is
+        # what keeps everything known about one person on a single record, so
+        # the example's recall resolves to it. It does NOT make writes safe to
+        # retry. See the note in the module docstring.
         schema = client.admin.generate_schema(
             cluster_id,
             (

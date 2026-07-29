@@ -1,11 +1,15 @@
 """Activities in isolation, via ``ActivityEnvironment``."""
 
+import dataclasses
+from datetime import timedelta
+
 import pytest
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
-from xmemory_temporal import XmemoryConfig, errors
+from xmemory_temporal import XmemoryConfig, XmemoryTimeouts, errors
 from xmemory_temporal.activities import XmemoryActivities
+from xmemory_temporal.config import client_timeout_seconds
 from xmemory_temporal.dto import ReadInput, WriteInput, WriteStatusInput
 
 from .fakes import FakeXmemoryInstance, api_error
@@ -83,7 +87,7 @@ def test_activity_names_are_pinned() -> None:
 
 
 async def test_binding_is_per_context_not_shared() -> None:
-    # N3: one XmemoryActivities is shared across every Worker built from a Client.
+    # One XmemoryActivities is shared across every Worker built from a Client.
     # Two concurrent run-contexts binding DIFFERENT clients must not clobber each
     # other (the old shared attribute was last-bind-wins). With the ContextVar,
     # each context — copied at task creation — resolves its own instance.
@@ -139,3 +143,46 @@ async def test_no_transport_detail_in_serialized_failure_chain() -> None:
     text = _failure_chain_text(failure)
     assert "internal-db.local" not in text
     assert "5432" not in text
+
+
+async def test_client_timeout_tracks_the_activity_deadline() -> None:
+    # The reviewer-facing invariant: the client budget is derived from the
+    # deadline Temporal assigned this attempt, so a workflow that lowers its
+    # start_to_close lowers the client timeout with it. Previously the client
+    # read a separate worker-side number and a short workflow budget silently
+    # inverted the order (Temporal abandoning the attempt while httpx ran on).
+    fake = FakeXmemoryInstance(read_answer="ok")
+    acts = _acts(fake)
+
+    for budget in (timedelta(seconds=3), timedelta(seconds=45), timedelta(seconds=120)):
+        env = ActivityEnvironment()
+        env.info = dataclasses.replace(env.info, start_to_close_timeout=budget)
+        await env.run(acts.read, ReadInput(query="q"))
+        used = fake.calls[-1].kwargs["timeout"]
+        assert used < budget.total_seconds(), f"client must give up first for a {budget} budget"
+
+
+async def test_client_timeout_falls_back_without_a_deadline() -> None:
+    # Only reachable when a caller schedules with schedule_to_close alone; the
+    # package defaults stand in rather than leaving the client unbounded.
+    fake = FakeXmemoryInstance(read_answer="ok")
+    acts = _acts(fake)
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(env.info, start_to_close_timeout=None)
+    await env.run(acts.read, ReadInput(query="q"))
+    assert fake.calls[-1].kwargs["timeout"] == client_timeout_seconds(XmemoryTimeouts().read_seconds)
+
+
+def test_workflow_defaults_match_the_shared_timeout_defaults() -> None:
+    # Guards the drift that caused the original defect: the workflow facade and
+    # XmemoryTimeouts must not grow independent copies of these numbers again.
+    import inspect
+
+    from xmemory_temporal import xmemory_for_workflow
+
+    params = inspect.signature(xmemory_for_workflow).parameters
+    t = XmemoryTimeouts()
+    assert params["read_timeout"].default == t.read
+    assert params["write_timeout"].default == t.write
+    assert params["write_start_timeout"].default == t.write_start
+    assert params["write_status_timeout"].default == t.write_status

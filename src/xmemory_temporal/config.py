@@ -1,27 +1,38 @@
-"""Configuration for the xmemory Temporal plugin.
+"""Worker-side configuration.
 
-Nothing in this module ever carries secret material. ``XmemoryConfig`` holds the
-*name* of the environment variable that supplies the API key, never the key
-itself, so the config stays safe to log, to serialize, and — should a caller
-pass it as an activity argument — to persist into Temporal workflow history,
-which is stored in the clear.
+Carries the *name* of the env var holding the API key, never the key, so the
+config is safe to log, serialize, and persist into Temporal history.
 """
 
 import os
 from datetime import timedelta
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 DEFAULT_API_KEY_ENV = "XMEM_API_KEY"
+DEFAULT_CLIENT_MARGIN_SECONDS = 5
+
+
+def client_timeout_seconds(
+    activity_seconds: float,
+    margin_seconds: int = DEFAULT_CLIENT_MARGIN_SECONDS,
+) -> float:
+    """Client budget for an activity whose Temporal deadline is ``activity_seconds``.
+
+    Always strictly below that deadline, so the client fails first with an
+    attributable xmemory error. Budgets at or under the margin get a
+    proportional one, so the ordering holds for every positive budget.
+    """
+    if activity_seconds <= margin_seconds:
+        return max(0.1, activity_seconds * 0.8)
+    return float(activity_seconds - margin_seconds)
 
 
 class XmemoryTimeouts(BaseModel):
-    """Per-activity ``start_to_close`` budgets, in seconds.
+    """Default ``start_to_close`` budgets applied by ``xmemory_for_workflow()``.
 
-    The guide is explicit that a tool declaration must always specify a
-    ``start_to_close_timeout``, because LLMs will not set one. These are the
-    defaults every ``WorkflowXmemory`` call
-    applies; users override per call.
+    The workflow owns the real budget; activities derive their client timeout
+    from whatever Temporal assigned.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -30,19 +41,6 @@ class XmemoryTimeouts(BaseModel):
     write_seconds: int = 180
     write_start_seconds: int = 30
     write_status_seconds: int = 30
-    # The client (httpx) timeout for a call is its activity's start_to_close
-    # MINUS this margin, so the client always gives up first and the failure is
-    # an attributable xmemory error rather than an opaque Temporal activity
-    # timeout. This must hold per activity: an inversion (client timeout above
-    # the activity budget) on the non-heartbeating write_start would let Temporal
-    # abandon the attempt while POST /write_async keeps running and can still
-    # enqueue server-side — the workflow believes the enqueue failed while a
-    # write was queued, and a later durable-write retry double-enqueues.
-    client_margin_seconds: int = 5
-
-    def client_timeout(self, activity_seconds: int) -> float:
-        """httpx timeout for a call whose activity budget is ``activity_seconds``."""
-        return float(max(1, activity_seconds - self.client_margin_seconds))
 
     @property
     def read(self) -> timedelta:
@@ -64,10 +62,9 @@ class XmemoryTimeouts(BaseModel):
 class XmemoryConfig(BaseModel):
     """Worker-side configuration for the xmemory plugin.
 
-    Deliberately contains no credential. The worker process resolves the key
-    from ``os.environ[api_key_env]`` at client-construction time; callers who
-    would rather pass it in-process use ``XmemoryPlugin(config, api_key=...)``,
-    which keeps it off this object entirely.
+    No credential: the key is read from ``os.environ[api_key_env]``, or passed
+    in-process via ``XmemoryPlugin(config, api_key=...)``. Activity budgets are
+    not here either; they belong to ``xmemory_for_workflow``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -75,19 +72,20 @@ class XmemoryConfig(BaseModel):
     instance_id: str
     url: str | None = None
     api_key_env: str = DEFAULT_API_KEY_ENV
-    timeouts: XmemoryTimeouts = Field(default_factory=XmemoryTimeouts)
+    # Gap between a call's Temporal deadline and its client timeout. If inverted,
+    # Temporal could abandon a write_start whose POST still enqueues server-side,
+    # and a later durable-write retry would double-enqueue.
+    client_margin_seconds: int = DEFAULT_CLIENT_MARGIN_SECONDS
     default_extraction_logic: str = "fast"
-    # Activity summaries render in the Temporal UI, visible to anyone with
-    # namespace access. Memory text is frequently personal, so content is
-    # redacted out of summaries unless a caller opts in.
+    # Summaries are visible to anyone with namespace access, and memory text is
+    # often personal, so content is redacted unless a caller opts in.
     include_content_in_summary: bool = False
 
     def resolve_api_key(self) -> str:
         """Read the API key from the environment.
 
-        Raises immediately (at worker start, via the plugin's run context)
-        rather than on the first activity execution, so a misconfigured worker
-        fails visibly instead of failing every workflow that touches memory.
+        Raises at worker start rather than on the first activity, so a
+        misconfigured worker fails visibly.
         """
         key = os.environ.get(self.api_key_env)
         if not key:

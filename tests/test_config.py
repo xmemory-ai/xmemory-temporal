@@ -41,10 +41,13 @@ def test_frozen() -> None:
 
 
 def test_client_timeout_below_every_activity_budget() -> None:
-    # F2: the client (httpx) must give up before Temporal for EVERY activity,
-    # including the short write_start / write_status ones — no inversion.
+    # The client (httpx) must give up before Temporal for EVERY budget a workflow
+    # could choose, not just the comfortable defaults. Budgets at or under the
+    # margin get a proportional one, so there is no input that inverts the order.
     from xmemory_temporal import XmemoryTimeouts
+    from xmemory_temporal.config import client_timeout_seconds
 
     t = XmemoryTimeouts()
-    for budget in (t.read_seconds, t.write_seconds, t.write_start_seconds, t.write_status_seconds):
-        assert t.client_timeout(budget) < budget
+    defaults = [t.read_seconds, t.write_seconds, t.write_start_seconds, t.write_status_seconds]
+    for budget in [*defaults, 0.5, 1, 2, 5, 6, 10, 3600]:
+        assert client_timeout_seconds(budget) < budget

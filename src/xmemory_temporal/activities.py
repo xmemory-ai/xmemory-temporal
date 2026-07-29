@@ -1,15 +1,8 @@
-"""The xmemory activities.
+"""The xmemory activities: the only place this package does I/O.
 
-All xmemory I/O happens here and nowhere else — workflow code only schedules
-these. The client is *injected* rather than looked up from a module-level cache:
-process-global mutable state leaks across tests and cannot represent a worker
-serving two instances, and ``maxims/CONCURRENCY.md`` only permits process-local
-state as a best-effort optimization that degrades gracefully. This isn't one.
-
-Every method is a plain ``async def``. ``xmemory-ai`` ships a native
-``AsyncInstanceAPI``, so there is no thread pool and no ``asyncio.to_thread``
-anywhere in this package — which is also why the Python and TypeScript ports
-have the same structure.
+The client is injected per Worker; each call's client timeout is derived from
+the deadline Temporal assigned the activity. ``xmemory-ai`` is natively async,
+so these are plain ``async def`` with no thread pool.
 """
 
 import contextvars
@@ -18,7 +11,7 @@ from typing import Any, Callable
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from xmemory_temporal.config import XmemoryConfig
+from xmemory_temporal.config import XmemoryConfig, XmemoryTimeouts, client_timeout_seconds
 from xmemory_temporal.dto import (
     ReadInput,
     ReadOutput,
@@ -35,21 +28,19 @@ from xmemory_temporal.dto import (
 from xmemory_temporal.errors import TYPE_NOT_BOUND, to_application_error
 from xmemory_temporal.protocol import XmemoryInstanceProtocol
 
-# Activity names are pinned explicitly so renaming a Python method can never
-# break replay of workflows already in flight.
+# Pinned so renaming a method cannot break replay of in-flight workflows.
 ACTIVITY_READ = "xmemory_read"
 ACTIVITY_WRITE = "xmemory_write"
 ACTIVITY_WRITE_START = "xmemory_write_start"
 ACTIVITY_WRITE_STATUS = "xmemory_write_status"
 
+# Used only when Temporal reports no per-attempt deadline (schedule_to_close only).
+_FALLBACK_BUDGET = XmemoryTimeouts()
 
-# The bound client lives in a ContextVar, not an attribute. ONE plugin object is
-# shared across every Worker built from a Client (Temporal filters the same
-# objects, not copies), and each Worker enters run_context independently. A
-# shared attribute would be last-bind-wins across Workers, and a Worker doing I/O
-# after another shut down its client would hit a closed httpx client. run_context
-# sets this per-Worker within the worker's run, so each Worker's activity
-# executions — which inherit that context — resolve THEIR OWN client.
+
+# A ContextVar, not an attribute: one plugin object is shared across every Worker
+# built from a Client, so an attribute would be last-bind-wins and a Worker could
+# reach another's closed client. Each Worker's run_context binds its own.
 _bound_instance: contextvars.ContextVar[XmemoryInstanceProtocol | None] = contextvars.ContextVar(
     "xmemory_bound_instance", default=None
 )
@@ -74,10 +65,8 @@ class XmemoryActivities:
     def instance(self) -> XmemoryInstanceProtocol:
         inst = _bound_instance.get()
         if inst is None:
-            # A configuration error — no run context bound a client (activities
-            # registered without the plugin). Fail fast: retrying can never bind
-            # it, so this must be non-retryable, not the default-retryable bare
-            # exception.
+            # Activities registered without the plugin. Non-retryable: no retry
+            # can bind a client.
             raise ApplicationError(
                 "xmemory activities are not bound to a client — register XmemoryPlugin on the "
                 "Client (the Worker inherits it) rather than registering the activity functions "
@@ -87,10 +76,21 @@ class XmemoryActivities:
             )
         return inst
 
+    def _client_timeout(self, fallback_seconds: int) -> float:
+        """Client budget for this call, derived from the activity's own deadline.
+
+        Deriving it, rather than keeping a second worker-side copy, is what
+        makes "the client gives up first" hold by construction when a workflow
+        lowers its timeout.
+        """
+        budget = activity.info().start_to_close_timeout
+        seconds = budget.total_seconds() if budget is not None else fallback_seconds
+        return client_timeout_seconds(seconds, self._config.client_margin_seconds)
+
     @activity.defn(name=ACTIVITY_READ)
     async def read(self, request: ReadInput) -> ReadOutput:
-        # Resolve the instance OUTSIDE the try so an unbound-client error keeps
-        # its non-retryable ApplicationError (above) instead of being re-mapped.
+        # Outside the try: an unbound-client error must keep its non-retryable
+        # ApplicationError rather than being re-mapped.
         instance = self.instance
         kwargs: dict[str, Any] = {}
         if request.read_mode is not None:
@@ -102,17 +102,13 @@ class XmemoryActivities:
         try:
             result = await instance.read(
                 request.query,
-                timeout=self._config.timeouts.client_timeout(self._config.timeouts.read_seconds),
+                timeout=self._client_timeout(_FALLBACK_BUDGET.read_seconds),
                 **kwargs,
             )
         except Exception as exc:
-            # `from None`, not `from exc`: Temporal serializes the whole cause
-            # chain into cleartext history, and the original XmemoryAPIError's
-            # message is NOT server-sanitized (it can embed the httpx string /
-            # URL path). We already carry code/status in the sanitized failure;
-            # dropping the cause keeps the raw transport detail out of history.
-            # (Merely omitting `from exc` is insufficient — the implicit
-            # __context__ is serialized too; only `from None` suppresses it.)
+            # `from None`, not `from exc`: Temporal serializes the cause chain
+            # into cleartext history and the client's message is unsanitized.
+            # Only `from None` suppresses the implicit __context__ too.
             raise to_application_error(exc) from None
         return project_read(result)
 
@@ -122,7 +118,7 @@ class XmemoryActivities:
         try:
             result = await instance.write(
                 request.text,
-                timeout=self._config.timeouts.client_timeout(self._config.timeouts.write_seconds),
+                timeout=self._client_timeout(_FALLBACK_BUDGET.write_seconds),
                 **self._write_kwargs(request),
             )
         except Exception as exc:
@@ -135,7 +131,7 @@ class XmemoryActivities:
         try:
             result = await instance.write_async(
                 request.text,
-                timeout=self._config.timeouts.client_timeout(self._config.timeouts.write_start_seconds),
+                timeout=self._client_timeout(_FALLBACK_BUDGET.write_start_seconds),
                 **self._write_kwargs(request),
             )
         except Exception as exc:
@@ -148,7 +144,7 @@ class XmemoryActivities:
         try:
             result = await instance.write_status(
                 request.write_id,
-                timeout=self._config.timeouts.client_timeout(self._config.timeouts.write_status_seconds),
+                timeout=self._client_timeout(_FALLBACK_BUDGET.write_status_seconds),
             )
         except Exception as exc:
             raise to_application_error(exc) from None
