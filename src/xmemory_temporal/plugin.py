@@ -1,12 +1,8 @@
 """``XmemoryPlugin`` — the single line a Temporal user adds.
 
-Built on ``temporalio.plugin.SimplePlugin``. Register it on the **client only**
-(``Client.connect(plugins=[XmemoryPlugin(config)])``): Temporal automatically
-applies a client's plugins to every Worker built from that client, where the
-activities and the run context take effect. Do **not** also pass it to the
-``Worker`` — the SDK would then apply it twice and fail with "More than one
-activity named xmemory_read". (Registering on the worker instead of the client
-also works; just never both.)
+Register on the client only (``Client.connect(plugins=[...])``); Workers inherit
+it. Passing it to both registers the activities twice and fails with "More than
+one activity named xmemory_read".
 """
 
 from contextlib import asynccontextmanager
@@ -20,18 +16,15 @@ from xmemory_temporal.config import XmemoryConfig
 from xmemory_temporal.interceptor import AutoCaptureConfig, build_auto_capture_interceptor
 from xmemory_temporal.protocol import XmemoryInstanceProtocol
 
-# The plugin name shows up in users' logs; keep it stable and descriptive. The
-# reference string users see in docs is `xmemory_temporal.XmemoryPlugin`.
+# Appears in users' logs; keep stable.
 PLUGIN_NAME = "xmemory"
 
 
 class XmemoryPlugin(SimplePlugin):
     """Register xmemory memory activities on a Temporal worker.
 
-    Deliberately does NOT install a namespace-wide data converter: that would
-    rewrite every payload flowing through the worker, not just xmemory's, which
-    a memory library has no business doing. Compose your own converter if you
-    need one.
+    Installs no data converter: one would rewrite every payload on the worker,
+    not just xmemory's. Compose your own if you need one.
     """
 
     def __init__(
@@ -65,16 +58,14 @@ class XmemoryPlugin(SimplePlugin):
         instance: XmemoryInstanceProtocol | None,
     ):
         if instance is not None:
-            # Test / advanced seam: caller supplied the handle directly. Bind it
-            # and skip opening a real client entirely.
+            # Caller supplied a handle (tests / custom transport): bind it as-is.
             return _bound(self._activities, instance)
         return _opened(self._activities, self._config, api_key=api_key, http_client=http_client)
 
 
 @asynccontextmanager
 async def _bound(activities: XmemoryActivities, instance: XmemoryInstanceProtocol):
-    # Bind for THIS Worker's run context (per-Worker, not plugin-lifetime), then
-    # reset so a sibling Worker's binding is never clobbered.
+    # Per-Worker binding; reset so a sibling Worker's is never clobbered.
     token = activities.bind(instance)
     try:
         yield

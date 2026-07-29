@@ -1,9 +1,7 @@
-"""The narrow slice of the xmemory client this plugin depends on.
+"""The four client methods this plugin uses, as a structural Protocol.
 
-``xmemory.AsyncInstanceAPI`` exposes fourteen methods; we use four. Depending on
-a structural ``Protocol`` over just those four means schema-evolution API churn
-in the client cannot break this package, and lets the test suite substitute a
-recording fake without patching anything.
+Depending on four of ``AsyncInstanceAPI``'s fourteen keeps client API churn from
+breaking us, and lets tests substitute a fake with no patching.
 """
 
 from typing import Any, Protocol, runtime_checkable
@@ -13,9 +11,8 @@ from typing import Any, Protocol, runtime_checkable
 class XmemoryInstanceProtocol(Protocol):
     """Structurally satisfied by ``xmemory.AsyncInstanceAPI``.
 
-    Return types are intentionally ``Any``: the concrete pydantic models belong
-    to ``xmemory-ai`` and are mapped onto this package's own DTOs at the
-    activity boundary (see ``dto.py`` for why they must not cross the wire).
+    Returns are ``Any``: vendor models are mapped to our DTOs at the activity
+    boundary (see ``dto.py``).
     """
 
     async def read(

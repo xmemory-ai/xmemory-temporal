@@ -1,31 +1,17 @@
-"""Activity input/output types.
+"""Activity input/output types: ours, not the client's.
 
-These are **dataclasses on purpose**, and they are deliberately *ours* rather
-than ``xmemory-ai``'s result models.
+Activity payloads are persisted verbatim into workflow history, so the type that
+crosses that boundary becomes a compatibility contract for every workflow that
+has ever run. Owning the wire format lets ``xmemory-ai`` evolve underneath us
+without breaking replay of completed workflows.
 
-*Ours, not the client's:* activity arguments and results are persisted verbatim
-into Temporal workflow history, so whatever type crosses that boundary becomes a
-compatibility contract for every workflow that has ever run. A field renamed in
-``xmemory-ai`` 0.11 would then break *replay of already-completed workflows* —
-the one failure mode Temporal's review cares about most. We own the wire format
-and map at the boundary; the client is free to evolve underneath us.
-
-*Dataclasses, not pydantic:* Temporal's default data converter reconstructs
-dataclasses from the activity's type hints with no configuration. Pydantic v2
-models round-trip back as plain ``dict``\\ s unless a pydantic data converter is
-installed namespace-wide — and this plugin refuses to impose one, since that
-would rewrite every payload flowing through the user's worker, not just ours.
-(``XmemoryConfig`` stays pydantic: it is never an activity argument, so it never
-touches history.)
+Dataclasses, not pydantic: Temporal's default converter reconstructs those with
+no configuration, whereas pydantic models need a namespace-wide converter this
+plugin refuses to impose. For the same reason this module uses real annotations
+(no ``from __future__ import annotations``), since the converter resolves them via
+``typing.get_type_hints``, which fails on stringized ones.
 
 Outputs are flattened projections — only the fields a workflow can act on.
-
-Note: like the rest of the package, this module uses real annotations (no
-``from __future__ import annotations``). It matters most here: Temporal's data
-converter reconstructs these dataclasses by calling ``typing.get_type_hints``
-on them, which fails to resolve stringized annotations (``Any``,
-``list[SubAnswer]``) from its evaluation context. ``X | None`` and ``list[...]``
-evaluate natively on the 3.10 floor, so nothing is lost.
 """
 
 from dataclasses import dataclass, field
