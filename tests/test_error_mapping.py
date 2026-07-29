@@ -3,7 +3,7 @@
 Each case asserts the ``type=`` string and the retryability verdict, driven by
 constructing an ``XmemoryAPIError`` exactly as the client would. The unknown-code
 row is the important one: a code we do not recognize must stay retryable and must
-not raise (``maxims/SERIALIZATION.md``).
+not raise, so a rolling deploy of a newer server cannot break this client.
 """
 
 from datetime import timedelta
@@ -119,7 +119,7 @@ def test_type_string_literals_are_pinned() -> None:
 
 
 def test_transport_string_is_not_leaked_into_history() -> None:
-    # F3: a transport failure carries the raw httpx string (internal hostnames /
+    # A transport failure carries the raw httpx string (internal hostnames /
     # ports / URL paths) in its message. The mapped ApplicationError, persisted
     # to cleartext Temporal history, must NOT echo it.
     from xmemory._exceptions import XmemoryAPIError

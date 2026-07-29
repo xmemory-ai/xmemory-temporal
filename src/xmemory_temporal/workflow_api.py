@@ -1,13 +1,8 @@
 """The workflow-facing xmemory surface.
 
-``WorkflowXmemory`` mirrors ``xmemory.AsyncInstanceAPI``
-method-for-method, so agent code that already ``await``\\ s ``inst.read(...)``
-keeps working — it just dispatches to an activity instead of doing I/O. That
-only works because the real client is async; the call site is identical.
-
-Everything here runs inside workflow context and is therefore replay-safe by
-construction: it only ever calls ``workflow.execute_activity`` and
-``workflow.sleep``. No client, no I/O, no wall-clock, no randomness.
+``WorkflowXmemory`` mirrors ``AsyncInstanceAPI`` method-for-method, so existing
+agent call sites keep working and just dispatch to an activity. Replay-safe by
+construction: only ``execute_activity`` and ``sleep``, no I/O or wall-clock.
 """
 
 from datetime import timedelta
@@ -33,15 +28,20 @@ with workflow.unsafe.imports_passed_through():
         WriteStatusInput,
         WriteStatusOutput,
     )
+    from xmemory_temporal.config import XmemoryTimeouts
     from xmemory_temporal.errors import TYPE_WRITE_FAILED, TYPE_WRITE_NOT_FOUND, TYPE_WRITE_TIMEOUT
 
-# Terminal `WriteQueueStatus` values (see xmemory._models.WriteQueueStatus).
+# The workflow owns every activity budget: what is set here is what Temporal
+# enforces AND what each activity derives its client timeout from, so the two can
+# never disagree. `XmemoryTimeouts` is only the source of the default numbers.
+_DEFAULTS = XmemoryTimeouts()
+
+# Terminal `WriteQueueStatus` values.
 _STATUS_COMPLETED = "completed"
 _STATUS_FAILED = "failed"
 _STATUS_NOT_FOUND = "not_found"
-# Non-terminal states we keep polling through. Listed explicitly so that a new
-# server-side state we have never seen is treated as *unknown*, and the loop
-# raises rather than silently deciding it is terminal and stopping early.
+# Listed explicitly so an unseen server state is treated as unknown and keeps
+# polling, rather than being mistaken for terminal.
 _STATUS_IN_PROGRESS = frozenset({"queued", "processing", "extracting", "extracted", "applying"})
 
 # Reads are idempotent, so they retry generously.
@@ -51,18 +51,10 @@ _DEFAULT_READ_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=10,
 )
-# Writes default to AT-MOST-ONCE. It is tempting to lean on xmemory's primary-key
-# dedup to make retries safe, but PK extraction is NON-deterministic: the model
-# authoring the key can normalize it differently on a re-extraction (e.g. "Dr.
-# Robert Kim" vs "Robert Kim"), and a disagreement forks the entity into a new
-# row. So a lost-response retry can duplicate. A failed write is surfaced to the
-# workflow instead, which then decides (retry / compensate / fail).
-#
-# Opt into retries ONLY when your primary keys are literal identifiers present
-# verbatim in the text (e.g. a customer_id / interaction_id you supply), which
-# re-extract deterministically:
-#   xmemory_for_workflow(write_retry_policy=RetryPolicy(maximum_attempts=3))
-# The general fix (an upstream idempotency key) is tracked in PUBLISHING-LATER.md.
+# At-most-once: xmemory assigns primary keys with a model, so a re-extraction can
+# normalize the same value differently and fork the record. A failed write is
+# surfaced to the workflow rather than retried. See the README's idempotency
+# section for when opting in is safe.
 _DEFAULT_WRITE_RETRY = RetryPolicy(maximum_attempts=1)
 # Polling write_status is idempotent (read-only), so it may retry freely.
 _DEFAULT_POLL_RETRY = RetryPolicy(
@@ -71,12 +63,9 @@ _DEFAULT_POLL_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=20),
     maximum_attempts=10,
 )
-# Grace window after enqueue during which a `not_found` poll is treated as
-# "not visible yet" rather than "gone for good". `write_async` promises only a
-# write_id for polling, not that the id is queryable on the next request, so on
-# a multi-node backend a healthy queued write can briefly read back not_found.
-# We keep polling through that window and only fail if not_found persists past
-# it. (Distinct from `failed`, which is terminal immediately.)
+# `write_async` does not promise the id is queryable on the next request, so a
+# healthy queued write can briefly read back not_found. Tolerate it this long
+# before treating it as terminal (`failed` stays terminal immediately).
 _DEFAULT_NOT_FOUND_GRACE = timedelta(seconds=10)
 
 
@@ -236,11 +225,8 @@ class WorkflowXmemory:
         if value == _STATUS_COMPLETED:
             return status
         if value == _STATUS_FAILED:
-            # Fixed message — the server's `error_detail` is not promised
-            # user-safe (unlike a reader's `error`), so keeping it out of the
-            # failure message keeps raw server strings out of the cleartext
-            # history *title*, consistent with errors.py. It is still carried in
-            # `details` for debuggability.
+            # Fixed message: `error_detail` is not promised user-safe, so it stays
+            # out of the cleartext history title and lives in `details` instead.
             raise ApplicationError(
                 f"xmemory write {status.write_id} failed",
                 {"write_id": status.write_id, "error_detail": status.error_detail},
@@ -249,8 +235,7 @@ class WorkflowXmemory:
             )
         if value == _STATUS_NOT_FOUND:
             if not not_found_is_terminal:
-                # Within the grace window: the enqueue may not be queryable yet.
-                # Keep polling rather than failing a possibly-healthy write.
+                # Enqueue may not be queryable yet, so keep polling.
                 return None
             raise ApplicationError(
                 f"xmemory write {status.write_id} not found",
@@ -258,12 +243,8 @@ class WorkflowXmemory:
                 type=TYPE_WRITE_NOT_FOUND,
                 non_retryable=True,
             )
-        # In-progress, OR an unrecognized status: keep polling (bounded by
-        # max_wait). The status enum has grown before (extracting / extracted /
-        # applying); a new in-progress state added during a rolling deploy must
-        # NOT permanently fail in-flight durable writes by being mistaken for
-        # terminal. This mirrors the error-code policy — an unknown value is
-        # tolerated, never fatal.
+        # In-progress or unrecognized: keep polling (bounded by max_wait). The
+        # enum has grown before; a new state must not fail in-flight writes.
         if value not in _STATUS_IN_PROGRESS:
             workflow.logger.warning(
                 "xmemory returned an unrecognized write status %r for %s; continuing to poll",
@@ -283,10 +264,10 @@ class WorkflowXmemory:
 
 def xmemory_for_workflow(
     *,
-    read_timeout: timedelta = timedelta(seconds=120),
-    write_timeout: timedelta = timedelta(seconds=180),
-    write_start_timeout: timedelta = timedelta(seconds=30),
-    write_status_timeout: timedelta = timedelta(seconds=30),
+    read_timeout: timedelta = _DEFAULTS.read,
+    write_timeout: timedelta = _DEFAULTS.write,
+    write_start_timeout: timedelta = _DEFAULTS.write_start,
+    write_status_timeout: timedelta = _DEFAULTS.write_status,
     read_retry_policy: RetryPolicy | None = None,
     write_retry_policy: RetryPolicy | None = None,
     poll_retry_policy: RetryPolicy | None = None,

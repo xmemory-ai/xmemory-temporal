@@ -1,18 +1,16 @@
-# xmemory × Temporal
+# xmemory-temporal
 
 Durable agent memory for [Temporal](https://temporal.io) — add
 [xmemory](https://xmemory.ai) reads and writes to your workflows as replay-safe
 Temporal Activities, with one plugin line on your Worker.
 
-Ships in two languages that mirror each other:
-
-- **Python** — [`python/`](./python), published as `xmemory-temporal` (PyPI)
-- **TypeScript** — [`typescript/`](./typescript), published as `@xmemory/temporal` (npm)
-
 > An agent's memory is exactly the state you don't want to lose when a worker
 > crashes mid-turn. Putting xmemory behind Temporal makes a memory write a
 > durable step: it survives process death, redeploys, and rolling upgrades, and
 > Temporal — not your code — owns its retries and timeouts.
+
+A TypeScript port with the same API ships as
+[`@xmemory/temporal`](https://github.com/xmemory-ai/xmemory-temporal-ts).
 
 ## What you get
 
@@ -25,13 +23,23 @@ Ships in two languages that mirror each other:
 - **A near-zero-diff migration.** The workflow-side handle mirrors the plain
   xmemory client's methods, so agent code that already calls `inst.read(...)` /
   `inst.write(...)` keeps working — it just dispatches to an Activity.
-- **Temporal-owned retries.** xmemory errors are mapped to typed
-  `ApplicationFailure`s with retryable/non-retryable verdicts (see below), so
-  you can tune `RetryPolicy` against stable error-type strings.
+- **Temporal-owned retries and timeouts.** xmemory errors map to typed
+  `ApplicationError`s with retryable/non-retryable verdicts, so you can tune
+  `RetryPolicy` against stable error-type strings.
 - **Opt-in auto-capture** of activity results into memory, via an Activity
   interceptor that never touches the replay path.
 
-## Quickstart (Python)
+## Install
+
+```bash
+pip install xmemory-temporal
+```
+
+Requires Python 3.10+ and `temporalio` 1.30+.
+
+## Quickstart
+
+Register the plugin on your **Client**; the Worker inherits it automatically:
 
 ```python
 from temporalio.client import Client
@@ -45,6 +53,8 @@ client = await Client.connect("localhost:7233", plugins=[plugin])
 # The Worker inherits the client's plugins automatically — do NOT pass it again here.
 worker = Worker(client, task_queue="my-agent", workflows=[MyWorkflow])
 ```
+
+Then call memory from inside a workflow:
 
 ```python
 from temporalio import workflow
@@ -64,55 +74,44 @@ class MyWorkflow:
         return str(answer.reader_result)                          # reader_result is Any
 ```
 
-## Quickstart (TypeScript)
+> **Register the plugin once, never twice.** Put it on the Client
+> (`Client.connect(plugins=[plugin])`); the Worker inherits its client's plugins,
+> so do *not* also pass it to `Worker(...)`, which registers the activities twice
+> and fails with "More than one activity named xmemory_read". (Worker-only also
+> works; just never both.)
 
-```ts
-import { NativeConnection, Worker } from '@temporalio/worker';
-import { XmemoryPlugin } from '@xmemory/temporal';
+Runnable end-to-end scripts live in [`examples/`](./examples): create an instance
+with a schema, run a worker, and drive a support-agent workflow.
 
-const plugin = new XmemoryPlugin({ instanceId: '<your-instance-id>' }); // reads XMEM_API_KEY
-const connection = await NativeConnection.connect({ address: 'localhost:7233' });
-const worker = await Worker.create({
-  connection,
-  taskQueue: 'my-agent',
-  workflowsPath: require.resolve('./workflows'),
-  plugins: [plugin],
-});
+## Timeouts
+
+**The workflow owns every activity budget.** `xmemory_for_workflow()` sets each
+call's `start_to_close_timeout`, and the activity derives its xmemory client
+timeout from the deadline Temporal actually assigned it, always a margin below,
+so the client gives up first and you get an attributable xmemory error instead of
+an opaque Temporal activity timeout.
+
+```python
+from datetime import timedelta
+
+mem = xmemory_for_workflow(
+    read_timeout=timedelta(seconds=60),     # a deep read on a large instance
+    write_timeout=timedelta(minutes=5),
+)
 ```
 
-```ts
-// workflows.ts
-import { xmemoryForWorkflow } from '@xmemory/temporal';
-
-export async function myWorkflow(userName: string, userMessage: string): Promise<unknown> {
-  const mem = xmemoryForWorkflow();
-  // Name whom the fact is about — a memory store has no ambient "current user".
-  await mem.writeDurable(`${userName}: ${userMessage}`);
-  return (await mem.read(`what do we know about ${userName}?`)).readerResult;
-}
-```
-
-Importing `xmemoryForWorkflow` from the package root inside workflow code is safe:
-the package is marked side-effect-free, so Temporal's workflow bundler tree-shakes
-the plugin and the xmemory client (non-workflow-safe modules) out of the sandbox
-bundle.
-
-Register the plugin **once**, never twice:
-
-- **Python** — put it on the **Client** (`Client.connect(plugins=[plugin])`). The
-  Worker inherits its client's plugins automatically, so do *not* also pass it to
-  `Worker(...)` — doing so registers the activities twice and fails with "More
-  than one activity named xmemory_read". (Worker-only also works; just never both.)
-- **TypeScript** — put it on the **Worker** (`Worker.create({ plugins: [plugin] })`),
-  as shown above. The TS plugin is a `WorkerPlugin`; the client does not carry it.
+Because the client timeout is *derived* rather than configured separately, the
+two can never disagree: lowering a workflow's budget lowers the client's with it.
+`XmemoryTimeouts` supplies the defaults (120s read, 180s write, 30s enqueue and
+poll); `XmemoryConfig(client_margin_seconds=...)` tunes the gap between the two.
 
 ## Credentials never reach workflow history
 
 The config holds the **name** of the environment variable that supplies the API
 key (`XMEM_API_KEY` by default), never the key itself — so nothing secret is ever
 serialized into activity arguments, which Temporal persists in the clear. Pass
-the key in-process instead with `XmemoryPlugin(config, api_key=...)` /
-`new XmemoryPlugin(config, { apiKey })` if you prefer.
+the key in-process instead with `XmemoryPlugin(config, api_key=...)` if you
+prefer.
 
 **Your memory text and queries, however, *are* in history.** The query you `read`
 and the text you `write` are activity inputs, and the error mapping keeps raw
@@ -145,26 +144,29 @@ Two things keep memory operations correct under retries and replay:
   or fail. Reads and status-polls (idempotent) retry generously.
 
 **Opt into write retries only when your primary keys are literal identifiers
-present verbatim in the text** — a `customer_id` / `interaction_id` you supply,
-which re-extract deterministically. Then a retry is a safe no-op update:
+present verbatim in the text**, such as a `customer_id` you supply, which
+re-extract. Then a retry is a safe no-op update:
 
 ```python
 mem = xmemory_for_workflow(write_retry_policy=RetryPolicy(maximum_attempts=3))
 ```
-```ts
-const mem = xmemoryForWorkflow({ writeRetryPolicy: { maximumAttempts: 3 } });
-```
 
-The general fix — an upstream idempotency key that makes *any* schema's writes
-safe to retry — is tracked as a prerequisite in
-[`PUBLISHING-LATER.md`](./PUBLISHING-LATER.md).
-[`examples/setup_memory.py`](./python/examples/setup_memory.py) shows creating an
+Two changes will take this out of your hands. **Structured writes** would let a
+workflow pass explicit mutations instead of free text, so a primary key never
+depends on extraction at all; supporting them here means extending the activity
+DTOs to carry a structured payload rather than a string. **Scoped writes**, which
+xmemory is adding in the near future, bind a write to a known record and so
+guarantee a stable primary key. Either one makes retry safety a property of the
+API rather than of how you phrase the text.
+
+[`examples/setup_memory.py`](./examples/setup_memory.py) shows creating an
 instance with a schema.
 
 ## Error handling
 
-xmemory errors become `ApplicationFailure`s with stable `type` strings you can
-match in a `RetryPolicy`. The mapping is derived from the server's error codes:
+xmemory errors become `ApplicationError`s with stable `type` strings you can
+match in a `RetryPolicy` (`non_retryable_error_types=[...]`). The mapping is
+derived from the server's error codes:
 
 | xmemory condition | `type` | Retryable? |
 |---|---|---|
@@ -185,7 +187,7 @@ Plus three raised by the durable write loop (`write_durable`), from a polled
 | durable-write outcome | `type` |
 |---|---|
 | the queued write reported `failed` | `XmemoryWriteFailed` |
-| the queued write id was `not_found` | `XmemoryWriteNotFound` |
+| the queued write id was `not_found` past a grace window | `XmemoryWriteNotFound` |
 | polling exceeded `max_wait` | `XmemoryWriteTimeout` |
 
 An unrecognized error code stays retryable and never raises — a stricter client
@@ -223,11 +225,15 @@ short timeout, so it can never slow the wrapped activity past its
 ## Testing
 
 ```bash
-integrations/temporal/gate.sh          # lint + typecheck + tests, both languages
+uv sync --dev
+uv run pytest                 # everything except the live e2e (it self-skips)
+uv run ruff check src tests examples
+uv run pyright src tests examples
 ```
 
-Both suites run with no live backend (a fake instance is injected), except a
+The suite runs with no live backend (a fake instance is injected), except a
 `live`-marked end-to-end test that needs `XMEM_API_KEY` + `XMEM_INSTANCE_ID`.
+See [`TESTING.md`](./TESTING.md) for the full strategy.
 
 ## Legal
 

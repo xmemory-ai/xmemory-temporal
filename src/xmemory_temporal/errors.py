@@ -1,9 +1,8 @@
 """Translate xmemory API errors into Temporal failures.
 
-Temporal owns retries, not this library — the guide is explicit, and so is the
-``xmemory-ai`` client ("the client never retries automatically"). This is the
-single place where a client-raised exception becomes an ``ApplicationError``
-carrying a retryability verdict.
+Temporal owns retries, not this library (nor the ``xmemory-ai`` client, which
+never retries automatically). This is the single place where a client-raised
+exception becomes an ``ApplicationError`` carrying a retryability verdict.
 
 Rules:
 
@@ -14,17 +13,13 @@ Rules:
 * A deterministic *client-side* error (a malformed request the server never
   saw) is the opposite: non-retryable, because retrying replays the same bad
   input.
-* **Never echo the raw exception string into the failure message.** For a
-  transport failure ``xmemory-ai`` raises ``XmemoryAPIError("Connection error: "
-  + str(e))`` with the httpx error embedded — internal hostnames, ports, URL
-  paths. Temporal persists the ``ApplicationError`` message to cleartext history
-  and renders it in the Web UI without the server's sanitizer, so we emit a
-  fixed per-type message and carry only ``code`` / ``status`` in details.
+* **Never echo the raw exception string into the failure message.** On a
+  transport failure the client embeds the httpx error (internal hostnames,
+  ports, URL paths), and Temporal persists that message to cleartext history.
+  Emit a fixed per-type message and carry only ``code`` / ``status`` in details.
 
-The vocabulary is the server's ``ErrorCode`` enum (``common/dto/response.py``).
 Note ``402`` means ``QUOTA_EXCEEDED`` only — trials were removed end-to-end and
-``xmemory-ai`` dropped ``TRIAL_ENDED`` from its contract in 0.11. Do not
-reintroduce it.
+``xmemory-ai`` dropped ``TRIAL_ENDED`` in 0.11. Do not reintroduce it.
 """
 
 import asyncio
@@ -91,7 +86,7 @@ _MESSAGES: dict[str, str] = {
     TYPE_UNKNOWN: "xmemory returned an unrecognized error",
 }
 
-# --- Server error codes (`common/dto/response.py::ErrorCode`) ---------------
+# --- Server error codes (the xmemory API's `ErrorCode` vocabulary) ----------
 
 _RETRYABLE_CODES = frozenset({"INTERNAL_ERROR", "SERVICE_UNAVAILABLE"})
 _AUTH_CODES = frozenset({"UNAUTHORIZED", "FORBIDDEN"})
