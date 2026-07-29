@@ -66,9 +66,17 @@ class ReadOutput:
 
 @dataclass(frozen=True)
 class WriteInput:
-    text: str
+    """Either free ``text`` for the extractor, or explicit ``structured_mutations``.
+
+    Mutations are plain JSON dicts in the client's ``WriteMutation`` shape. They
+    are kept as dicts rather than the client's pydantic models because activity
+    payloads must round-trip through Temporal's default converter.
+    """
+
+    text: str = ""
     extraction_logic: str | None = None
     diff_engine: bool | None = None
+    structured_mutations: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)

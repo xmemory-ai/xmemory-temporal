@@ -510,15 +510,15 @@ wheels = [
 
 [[package]]
 name = "xmemory-ai"
-version = "0.11.0"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0f/24/e133a390fa8ee02c64f17663af51cc9ebbbfd7823fdd13b621ffbf0383ec/xmemory_ai-0.11.0.tar.gz", hash = "sha256:1a682890b8320a5a4a9679adaab4008d3412855f8eb7583e24c518082203ab0a", size = 37479, upload-time = "2026-07-21T16:17:32.321Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/e4/e03982e8699cd33f59bc871e5b5d461663a30656a8d80c7070f1c984326e/xmemory_ai-0.12.0.tar.gz", hash = "sha256:8e6fa3b023497a6f67a8f881ae19aa57d0fa846a7c84ad2b96bb9f27d9efa4ca", size = 40797, upload-time = "2026-07-24T12:37:34.185Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/0f/b4fbe9ed7cc8d5679eafdc64893cdbe01e9270d40034419e4bc800d34694/xmemory_ai-0.11.0-py3-none-any.whl", hash = "sha256:407d63168a00a3da10757704dd561ffd4dc18c286649b4a7184326b19b53385e", size = 27294, upload-time = "2026-07-21T16:17:31.415Z" },
+    { url = "https://files.pythonhosted.org/packages/52/e7/3021df7dda08591a6178bd5113367853dad31c958ad4c5ac71378c0dff20/xmemory_ai-0.12.0-py3-none-any.whl", hash = "sha256:0514ac1a3068daf9e6c4f661abfc1a4d636c9c1d07557833b2a42bda57a2b7a2", size = 29437, upload-time = "2026-07-24T12:37:33.209Z" },
 ]
 
 [[package]]
@@ -541,7 +541,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "temporalio", specifier = ">=1.30,<2" },
-    { name = "xmemory-ai", specifier = ">=0.11" },
+    { name = "xmemory-ai", specifier = ">=0.12" },
 ]
 
 [package.metadata.requires-dev]

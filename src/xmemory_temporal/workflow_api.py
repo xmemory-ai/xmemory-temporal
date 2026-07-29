@@ -6,6 +6,7 @@ construction: only ``execute_activity`` and ``sleep``, no I/O or wall-clock.
 """
 
 from datetime import timedelta
+from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -119,14 +120,25 @@ class WorkflowXmemory:
 
     async def write(
         self,
-        text: str,
+        text: str = "",
         *,
         extraction_logic: str | None = None,
         diff_engine: bool | None = None,
+        structured_mutations: list[dict[str, Any]] | None = None,
     ) -> WriteOutput:
+        """Write memory, from free ``text`` or explicit ``structured_mutations``.
+
+        Structured mutations carry their own primary keys and skip extraction, so
+        they apply deterministically and are safe to retry.
+        """
         return await workflow.execute_activity(
             ACTIVITY_WRITE,
-            WriteInput(text=text, extraction_logic=extraction_logic, diff_engine=diff_engine),
+            WriteInput(
+                text=text,
+                extraction_logic=extraction_logic,
+                diff_engine=diff_engine,
+                structured_mutations=structured_mutations,
+            ),
             result_type=WriteOutput,
             start_to_close_timeout=self._write_timeout,
             retry_policy=self._write_retry,
@@ -137,15 +149,21 @@ class WorkflowXmemory:
 
     async def write_async_start(
         self,
-        text: str,
+        text: str = "",
         *,
         extraction_logic: str | None = "deep",
         diff_engine: bool | None = None,
+        structured_mutations: list[dict[str, Any]] | None = None,
     ) -> WriteStartOutput:
         """Enqueue a write and return its id, without waiting for it to finish."""
         return await workflow.execute_activity(
             ACTIVITY_WRITE_START,
-            WriteInput(text=text, extraction_logic=extraction_logic, diff_engine=diff_engine),
+            WriteInput(
+                text=text,
+                extraction_logic=extraction_logic,
+                diff_engine=diff_engine,
+                structured_mutations=structured_mutations,
+            ),
             result_type=WriteStartOutput,
             start_to_close_timeout=self._write_start_timeout,
             retry_policy=self._write_retry,
@@ -164,10 +182,11 @@ class WorkflowXmemory:
 
     async def write_durable(
         self,
-        text: str,
+        text: str = "",
         *,
         extraction_logic: str | None = "deep",
         diff_engine: bool | None = None,
+        structured_mutations: list[dict[str, Any]] | None = None,
         poll_interval: timedelta | None = None,
         max_poll_interval: timedelta | None = None,
         max_wait: timedelta = timedelta(minutes=15),
@@ -183,7 +202,12 @@ class WorkflowXmemory:
         A ``not_found`` is terminal immediately: ``write_async`` is transactional,
         so the id it returns is always queryable.
         """
-        start = await self.write_async_start(text, extraction_logic=extraction_logic, diff_engine=diff_engine)
+        start = await self.write_async_start(
+            text,
+            extraction_logic=extraction_logic,
+            diff_engine=diff_engine,
+            structured_mutations=structured_mutations,
+        )
 
         # `is not None`, not `or`: timedelta(0) is falsy, so `or` would silently
         # override an explicitly-passed zero. TypeScript's `??` already preserves
