@@ -114,6 +114,12 @@ _DAILY_QUOTA_KIND = "daily_quota_exceeded"
 _MONTHLY_QUOTA_KIND = "monthly_quota_exceeded"
 
 
+# Upper bound on a server-supplied retry hint. The value is echoed into
+# `next_retry_delay`, so an implausible one would stall the next attempt for its
+# full duration; clamp rather than trust it unconditionally.
+_MAX_RETRY_DELAY_SECONDS = 3600
+
+
 def _retry_delay(exc: Any) -> timedelta | None:
     """Prefer the server's own hint over blind exponential backoff."""
     seconds = getattr(exc, "retry_after", None)
@@ -127,7 +133,9 @@ def _retry_delay(exc: Any) -> timedelta | None:
         value = int(seconds)
     except (TypeError, ValueError):
         return None
-    return timedelta(seconds=value) if value > 0 else None
+    if value <= 0:
+        return None
+    return timedelta(seconds=min(value, _MAX_RETRY_DELAY_SECONDS))
 
 
 def _quota_verdict(exc: Any) -> tuple[str, bool]:

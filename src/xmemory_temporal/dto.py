@@ -19,10 +19,32 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class ScopeObject:
+    """One record a scoped read may touch, addressed by its primary key."""
+
+    type: str
+    key: dict[str, str | int | float | bool] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ReadScope:
+    """Restrict a read to specific records.
+
+    Mirrors the client's ``ReadScope`` so a malformed scope is a type error at
+    author time rather than a non-retryable ``XmemoryBadRequest`` at runtime.
+    ``relations_scope`` is ``no_relations`` (objects only) by default;
+    ``all_relations`` also exposes relations among the in-scope objects.
+    """
+
+    objects: list[ScopeObject] = field(default_factory=list)
+    relations_scope: str = "no_relations"
+
+
+@dataclass(frozen=True)
 class ReadInput:
     query: str
     read_mode: str | None = None
-    scope: dict[str, Any] | None = None
+    scope: ReadScope | None = None
     read_id: str | None = None
 
 

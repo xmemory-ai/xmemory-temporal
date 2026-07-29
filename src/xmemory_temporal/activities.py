@@ -96,7 +96,12 @@ class XmemoryActivities:
         if request.read_mode is not None:
             kwargs["read_mode"] = request.read_mode
         if request.scope is not None:
-            kwargs["scope"] = request.scope
+            # The client validates this into its own ReadScope model; hand it a
+            # plain mapping so we never import a vendor type into the DTO layer.
+            kwargs["scope"] = {
+                "objects": [{"type": o.type, "key": o.key} for o in request.scope.objects],
+                "relations_scope": request.scope.relations_scope,
+            }
         if request.read_id is not None:
             kwargs["read_id"] = request.read_id
         try:

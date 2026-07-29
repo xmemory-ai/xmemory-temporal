@@ -156,3 +156,10 @@ def test_transport_exception_object_is_retryable() -> None:
     app = to_application_error(httpx.ConnectError("boom"))
     assert app.type == errors.TYPE_UNAVAILABLE
     assert app.non_retryable is False
+
+
+def test_retry_hint_is_clamped() -> None:
+    # The hint is echoed into next_retry_delay, so an implausible value would
+    # stall the next attempt for its full duration.
+    app_err = to_application_error(api_error(status=429, code="RATE_LIMITED", retry_after=86_400))
+    assert app_err.next_retry_delay == timedelta(seconds=3600)

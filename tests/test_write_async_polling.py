@@ -72,25 +72,16 @@ async def test_failed_status_raises(env: WorkflowEnvironment) -> None:
     assert any("extractor exploded" in str(d) for d in app_err.details)
 
 
-async def test_not_found_raises_after_grace(env: WorkflowEnvironment) -> None:
-    # A write id that stays not_found past the grace window is a real terminal
-    # failure (the write truly does not exist).
+async def test_not_found_raises_immediately(env: WorkflowEnvironment) -> None:
+    # `write_async` is transactional, so the id it returned is always queryable.
+    # A not_found means the write is genuinely gone: fail on the first poll
+    # rather than masking a backend that violated that contract.
     fake = FakeXmemoryInstance()
-    fake.status_sequence([WriteQueueStatus.NOT_FOUND])  # clamps: not_found forever
+    fake.status_sequence([WriteQueueStatus.NOT_FOUND])
     with pytest.raises(WorkflowFailureError) as ei:
         await _run(env, fake)
     assert _app_error(ei.value).type == errors.TYPE_WRITE_NOT_FOUND
-
-
-async def test_not_found_within_grace_keeps_polling(env: WorkflowEnvironment) -> None:
-    # A not_found on the first polls means the enqueue is not visible yet, NOT
-    # that the write is gone. The loop must tolerate it during the grace window
-    # and succeed once the write becomes queryable.
-    fake = FakeXmemoryInstance()
-    fake.status_sequence([WriteQueueStatus.NOT_FOUND, WriteQueueStatus.NOT_FOUND, WriteQueueStatus.COMPLETED])
-    status = await _run(env, fake)
-    assert status == "completed"
-    assert fake.count("write_status") == 3
+    assert fake.count("write_status") == 1
 
 
 async def test_two_phase_intermediate_states_are_non_terminal(env: WorkflowEnvironment) -> None:
@@ -131,3 +122,31 @@ async def test_max_wait_timeout_raises(env: WorkflowEnvironment) -> None:
     with pytest.raises(WorkflowFailureError) as ei:
         await _run(env, fake)
     assert "XmemoryWriteTimeout" in str(ei.value.cause)
+
+
+async def test_zero_poll_interval_is_honored(env: WorkflowEnvironment) -> None:
+    # timedelta(0) is falsy, so resolving with `or` would silently substitute the
+    # 2s default. Read the timers back out of history: an honored zero produces
+    # zero-length sleeps, the default would produce 2s then 3s.
+    from .workflows import ZeroPollDurableWriteWorkflow
+
+    fake = FakeXmemoryInstance()
+    fake.status_sequence([WriteQueueStatus.PROCESSING, WriteQueueStatus.PROCESSING, WriteQueueStatus.COMPLETED])
+    tq = f"tq-{uuid.uuid4()}"
+    wf_id = f"wf-{uuid.uuid4()}"
+    async with Worker(
+        env.client,
+        task_queue=tq,
+        workflows=[ZeroPollDurableWriteWorkflow],
+        plugins=[XmemoryPlugin(XmemoryConfig(instance_id="inst-1"), instance=fake)],
+    ):
+        status = await env.client.execute_workflow(ZeroPollDurableWriteWorkflow.run, "x", id=wf_id, task_queue=tq)
+    assert status == "completed"
+
+    timers = []
+    async for event in env.client.get_workflow_handle(wf_id).fetch_history_events():
+        if event.HasField("timer_started_event_attributes"):
+            d = event.timer_started_event_attributes.start_to_fire_timeout
+            timers.append(d.seconds + d.nanos / 1e9)
+    assert timers, "the poll loop should have started timers"
+    assert all(t == 0 for t in timers), f"explicit zero was overridden: {timers}"
