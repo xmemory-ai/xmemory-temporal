@@ -17,7 +17,6 @@ and, in another terminal, ``python examples/run_workflow.py`` to drive it.
 
 import asyncio
 import os
-import signal
 
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -40,24 +39,15 @@ async def main() -> None:
     # ("More than one activity named xmemory_read").
     client = await Client.connect(os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"), plugins=[plugin])
 
-    # The Python SDK's ``worker.run()`` does not install signal handlers, so a
-    # bare Ctrl-C raises KeyboardInterrupt mid-run. Instead, translate SIGINT /
-    # SIGTERM into an event and drain the worker cleanly via ``async with``.
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, stop.set)
-        except NotImplementedError:
-            # add_signal_handler is POSIX-only; on Windows fall back to the
-            # default KeyboardInterrupt behavior.
-            pass
-
-    async with Worker(client, task_queue=TASK_QUEUE, workflows=[SupportAgentWorkflow]):
-        print(f"worker running on task queue {TASK_QUEUE!r} — Ctrl-C to stop")
-        await stop.wait()
-        print("shutting down…")
+    worker = Worker(client, task_queue=TASK_QUEUE, workflows=[SupportAgentWorkflow])
+    print(f"worker running on task queue {TASK_QUEUE!r} — Ctrl-C to stop")
+    await worker.run()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Ctrl-C cancels `worker.run()`, which drains the worker; swallow the
+        # resulting KeyboardInterrupt so the example exits quietly.
+        print("\nworker stopped")

@@ -81,7 +81,10 @@ class MyWorkflow:
 > works; just never both.)
 
 Runnable end-to-end scripts live in [`examples/`](./examples): create an instance
-with a schema, run a worker, and drive a support-agent workflow.
+with a schema, run a worker, and drive a support-agent workflow. They call
+`worker.run()` directly to stay readable. In production, install SIGINT/SIGTERM
+handlers so a deploy drains the worker instead of killing it mid-activity; see
+[Temporal's worker shutdown guidance](https://docs.temporal.io/encyclopedia/workers/worker-shutdown#graceful-shutdown).
 
 ## Timeouts
 
