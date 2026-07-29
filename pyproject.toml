@@ -20,7 +20,7 @@ dependencies = [
     "temporalio>=1.30,<2",
     # 0.11 is the first MIT release (matches this package's license) and the one
     # that dropped TRIAL_ENDED from the documented error contract.
-    "xmemory-ai>=0.11",
+    "xmemory-ai>=0.12",
 ]
 
 # NOTE: `httpx` and `pydantic` arrive transitively via `xmemory-ai`. Do not pin

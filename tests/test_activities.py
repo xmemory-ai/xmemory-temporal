@@ -186,3 +186,32 @@ def test_workflow_defaults_match_the_shared_timeout_defaults() -> None:
     assert params["write_timeout"].default == t.write
     assert params["write_start_timeout"].default == t.write_start
     assert params["write_status_timeout"].default == t.write_status
+
+
+async def test_structured_mutations_skip_extraction() -> None:
+    # A structured write carries its own primary keys, so the client gets the
+    # mutations verbatim and no extraction_logic: the server applies it without
+    # running the extractor, which is what makes it deterministic to retry.
+    fake = FakeXmemoryInstance()
+    acts = _acts(fake)
+    mutations = [
+        {
+            "object_mutation": {
+                "object_type": "Customer",
+                "update": {"key": {"customer_id": "c-1"}, "values": {"tier": "gold"}},
+            }
+        }
+    ]
+    await ActivityEnvironment().run(acts.write, WriteInput(structured_mutations=mutations))
+    call = fake.calls[-1]
+    assert call.kwargs["structured_mutations"] == mutations
+    assert "extraction_logic" not in call.kwargs
+    assert call.text_or_query == ""
+
+
+async def test_text_write_still_sends_extraction_logic() -> None:
+    fake = FakeXmemoryInstance()
+    acts = _acts(fake)
+    await ActivityEnvironment().run(acts.write, WriteInput(text="Alice likes tea"))
+    assert fake.calls[-1].kwargs.get("extraction_logic") == "fast"
+    assert "structured_mutations" not in fake.calls[-1].kwargs

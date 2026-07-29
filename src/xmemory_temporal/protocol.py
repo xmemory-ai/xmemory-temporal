@@ -27,8 +27,9 @@ class XmemoryInstanceProtocol(Protocol):
 
     async def write(
         self,
-        text: str,
+        text: str = ...,
         *,
+        structured_mutations: Any = ...,
         extraction_logic: Any = ...,
         diff_engine: bool | None = ...,
         timeout: float | None = ...,
@@ -36,8 +37,9 @@ class XmemoryInstanceProtocol(Protocol):
 
     async def write_async(
         self,
-        text: str,
+        text: str = ...,
         *,
+        structured_mutations: Any = ...,
         extraction_logic: Any = ...,
         diff_engine: bool | None = ...,
         timeout: float | None = ...,

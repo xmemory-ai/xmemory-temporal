@@ -86,13 +86,13 @@ class FakeXmemoryInstance:
         self.calls.append(CallRecord("read", query, kwargs))
         return _Read(reader_result=self._read_answer)
 
-    async def write(self, text: str, **kwargs: Any) -> _Write:
+    async def write(self, text: str = "", **kwargs: Any) -> _Write:
         self.calls.append(CallRecord("write", text, kwargs))
         self._maybe_fail()
         self._write_counter += 1
         return _Write(write_id=f"w{self._write_counter}")
 
-    async def write_async(self, text: str, **kwargs: Any) -> _WriteStart:
+    async def write_async(self, text: str = "", **kwargs: Any) -> _WriteStart:
         self.calls.append(CallRecord("write_async", text, kwargs))
         self._maybe_fail()
         self._write_counter += 1

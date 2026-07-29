@@ -169,21 +169,36 @@ Two things keep memory operations correct under retries and replay:
   failed write is surfaced to your workflow, which decides to retry, compensate,
   or fail. Reads and status-polls (idempotent) retry generously.
 
-**Opt into write retries only when your primary keys are literal identifiers
-present verbatim in the text**, such as a `customer_id` you supply, which
-re-extract. Then a retry is a safe no-op update:
+**Structured writes are the reliable way to make a write retryable.** Pass
+explicit mutations instead of free text and the primary key is one you supply, so
+nothing is extracted and re-applying the write is deterministic:
 
 ```python
 mem = xmemory_for_workflow(write_retry_policy=RetryPolicy(maximum_attempts=3))
+await mem.write(
+    structured_mutations=[
+        {
+            "object_mutation": {
+                "object_type": "Customer",
+                "update": {"key": {"customer_id": "c-1"}, "values": {"tier": "gold"}},
+            }
+        }
+    ]
+)
 ```
 
-Two changes will take this out of your hands. **Structured writes** would let a
-workflow pass explicit mutations instead of free text, so a primary key never
-depends on extraction at all; supporting them here means extending the activity
-DTOs to carry a structured payload rather than a string. **Scoped writes**, which
-xmemory is adding in the near future, bind a write to a known record and so
-guarantee a stable primary key. Either one makes retry safety a property of the
-API rather than of how you phrase the text.
+A mutation is a `create`, `update`, or `delete` on one object or relation, and
+it carries the key explicitly, so a retry addresses the same row instead of
+forking a new one. An `update` in particular re-applies identically.
+
+For text writes, opt into retries only when your primary keys are literal
+identifiers that appear verbatim in the text, such as a `customer_id` you supply,
+so the extractor has no room to normalise them differently on a second pass. That
+is a convention you have to keep, not something the API enforces.
+
+**Scoped writes**, which xmemory is adding in the near future, will bind a text
+write to a known record and guarantee a stable primary key, closing the gap for
+text writes too.
 
 [`examples/setup_memory.py`](./examples/setup_memory.py) shows creating an
 instance with a schema.

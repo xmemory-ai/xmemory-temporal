@@ -157,6 +157,11 @@ class XmemoryActivities:
 
     def _write_kwargs(self, request: WriteInput) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}
+        if request.structured_mutations is not None:
+            # A structured write carries its own keys, so the server applies it
+            # without running the extractor; text and extraction_logic are moot.
+            kwargs["structured_mutations"] = request.structured_mutations
+            return kwargs
         logic = request.extraction_logic or self._config.default_extraction_logic
         if logic is not None:
             kwargs["extraction_logic"] = logic
