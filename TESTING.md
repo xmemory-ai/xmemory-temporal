@@ -105,27 +105,57 @@ uv run pyright src tests examples
 XMEM_API_KEY=xmem_... XMEM_INSTANCE_ID=... uv run pytest -m live
 ```
 
-### Manual durability demo
+### Manual end-to-end run
 
-The whole value proposition is that a durable write survives worker death. Verify
-it by running the example worker (`examples/worker.py`) against a local
-`temporal server start-dev` and a real instance, then **killing the worker
-mid-`write_durable` and restarting it** — the poll loop must resume from history
-and complete.
+Drives the full path (dev server, worker, real backend) through the scripts in
+[`examples/`](./examples). Three terminals:
+
+```bash
+# Credentials. XMEM_API_URL matters: the client falls back to
+# https://api.xmemory.ai when it is unset, so a staging key needs it set.
+export XMEM_API_KEY=xmem_...
+export XMEM_API_URL=https://api.stg.xmemory.ai      # omit only for production
+
+# Terminal 1: a local Temporal dev server (UI on http://localhost:8233)
+temporal server start-dev
+
+# Terminal 2: create an instance with a name-keyed schema, then run the worker
+export XMEM_INSTANCE_ID="$(uv run python examples/setup_memory.py)"
+uv run python examples/worker.py
+#   worker running on task queue 'xmemory-example' - Ctrl-C to stop
+
+# Terminal 3: drive one workflow
+uv run python examples/run_workflow.py
+#   agent recalled: {'answer': 'Prefers email over phone calls.'}
+```
+
+The workflow does a `write_durable` and then reads the fact back, so a successful
+run exercises the plugin, the client, and the durable poll loop against a real
+backend. Inspect the run in the Temporal UI to check that activity summaries
+render legibly.
+
+**The durability demo.** The whole value proposition is that a durable write
+survives worker death, so also **kill the worker mid-`write_durable` and restart
+it**: the poll loop must resume from history and complete rather than restarting
+the write.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push and pull request, as a matrix over
-**Python 3.10 / 3.12 / 3.13** (floor matching `xmemory-ai`, through current):
+In this monorepo the package is linted, type-checked, and tested in its own
+environment via `integrations/temporal/gate.sh`, which for Python runs, each with
+`uv run --directory`:
 
-1. `uv sync --dev` (locked install)
-2. `ruff check` + `ruff format --check` on `src tests examples`
-3. `pyright` on `src tests examples`
-4. `pytest -m "not live"` (the live test is excluded — CI has no backend)
+1. `ruff check` + `ruff format --check` on `src tests examples`
+2. `pyright` on `src tests examples`
+3. `pytest` — no marker filter, so the live e2e is excluded only by the
+   `XMEM_API_KEY` / `XMEM_INSTANCE_ID` `skipif` in `test_e2e_live.py`; it runs
+   when those are exported.
 
-Each matrix leg reports as a check named `Python 3.10` / `Python 3.12` /
-`Python 3.13`. `main` is branch-protected: all three must pass before a pull
-request can merge.
+The integration is not yet published — see [`PUBLISHING-LATER.md`](../PUBLISHING-LATER.md).
+The standalone mirror repository (private during the Temporal review) runs the
+same checks in GitHub Actions as a matrix over **Python 3.10 / 3.12 / 3.13**,
+each leg reporting as a check named `Python 3.10` / `Python 3.12` / `Python 3.13`,
+gated by branch protection before any PyPI release.
 
 > `examples/` is deliberately included in lint/type-check — the examples are the
 > advertised migration story, so a broken one fails the gate rather than shipping.
