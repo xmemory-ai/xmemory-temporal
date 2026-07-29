@@ -6,7 +6,6 @@ construction: only ``execute_activity`` and ``sleep``, no I/O or wall-clock.
 """
 
 from datetime import timedelta
-from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -21,6 +20,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from xmemory_temporal.dto import (
         ReadInput,
+        ReadScope,
         ReadOutput,
         WriteInput,
         WriteOutput,
@@ -63,10 +63,6 @@ _DEFAULT_POLL_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=20),
     maximum_attempts=10,
 )
-# `write_async` does not promise the id is queryable on the next request, so a
-# healthy queued write can briefly read back not_found. Tolerate it this long
-# before treating it as terminal (`failed` stays terminal immediately).
-_DEFAULT_NOT_FOUND_GRACE = timedelta(seconds=10)
 
 
 class WorkflowXmemory:
@@ -104,7 +100,7 @@ class WorkflowXmemory:
         query: str,
         *,
         read_mode: str | None = None,
-        scope: dict[str, Any] | None = None,
+        scope: ReadScope | None = None,
         read_id: str | None = None,
     ) -> ReadOutput:
         return await workflow.execute_activity(
@@ -175,7 +171,6 @@ class WorkflowXmemory:
         poll_interval: timedelta | None = None,
         max_poll_interval: timedelta | None = None,
         max_wait: timedelta = timedelta(minutes=15),
-        not_found_grace: timedelta | None = None,
     ) -> WriteStatusOutput:
         """Enqueue a write and poll it to completion, durably.
 
@@ -185,23 +180,22 @@ class WorkflowXmemory:
         the only non-idempotent step; the extraction itself is observed through
         idempotent, freely-retryable polls.
 
-        A ``not_found`` status is tolerated for ``not_found_grace`` after the
-        enqueue (see ``_DEFAULT_NOT_FOUND_GRACE``): the write id may not be
-        queryable immediately, so failing the durable write on the first poll
-        would kill healthy writes on any backend with enqueue→visible lag.
+        A ``not_found`` is terminal immediately: ``write_async`` is transactional,
+        so the id it returns is always queryable.
         """
         start = await self.write_async_start(text, extraction_logic=extraction_logic, diff_engine=diff_engine)
 
-        delay = poll_interval or timedelta(seconds=2)
-        cap = max_poll_interval or timedelta(seconds=30)
-        now = workflow.now()
-        deadline = now + max_wait
-        not_found_deadline = now + (not_found_grace or _DEFAULT_NOT_FOUND_GRACE)
+        # `is not None`, not `or`: timedelta(0) is falsy, so `or` would silently
+        # override an explicitly-passed zero. TypeScript's `??` already preserves
+        # it, so `or` here would also make the two ports disagree.
+        delay = poll_interval if poll_interval is not None else timedelta(seconds=2)
+        cap = max_poll_interval if max_poll_interval is not None else timedelta(seconds=30)
+        deadline = workflow.now() + max_wait
 
+        warned_history = False
         while True:
             status = await self.write_status(start.write_id)
-            not_found_is_terminal = workflow.now() >= not_found_deadline
-            terminal = self._interpret_status(status, not_found_is_terminal=not_found_is_terminal)
+            terminal = self._interpret_status(status)
             if terminal is not None:
                 return terminal
             if workflow.now() + delay >= deadline:
@@ -214,13 +208,24 @@ class WorkflowXmemory:
             await workflow.sleep(delay)
             delay = min(delay * 1.5, cap)
 
-    @staticmethod
-    def _interpret_status(status: WriteStatusOutput, *, not_found_is_terminal: bool = True) -> WriteStatusOutput | None:
-        """Return the status if terminal-success, raise on terminal-failure, else ``None``.
+            # Each poll adds an activity and a timer to history, so a long
+            # max_wait with a short interval can approach Temporal's per-workflow
+            # event limit. This helper cannot call continue_as_new: it runs
+            # inside the CALLER's workflow, and restarting that would discard
+            # their state. Surface Temporal's own signal so the caller can move
+            # the durable write into a child workflow, where continue-as-new is
+            # theirs to use.
+            if not warned_history and workflow.info().is_continue_as_new_suggested():
+                warned_history = True
+                workflow.logger.warning(
+                    "xmemory write_durable has polled %s into a history Temporal now suggests "
+                    "continuing-as-new; run it in a child workflow, or raise max_poll_interval",
+                    start.write_id,
+                )
 
-        ``not_found_is_terminal=False`` (during the post-enqueue grace window)
-        treats a ``not_found`` as non-terminal so the loop keeps polling.
-        """
+    @staticmethod
+    def _interpret_status(status: WriteStatusOutput) -> WriteStatusOutput | None:
+        """Return the status if terminal-success, raise on terminal-failure, else ``None``."""
         value = status.write_status
         if value == _STATUS_COMPLETED:
             return status
@@ -234,9 +239,8 @@ class WorkflowXmemory:
                 non_retryable=True,
             )
         if value == _STATUS_NOT_FOUND:
-            if not not_found_is_terminal:
-                # Enqueue may not be queryable yet, so keep polling.
-                return None
+            # `write_async` is transactional, so a returned id is always
+            # queryable. A not_found here means the write is genuinely gone.
             raise ApplicationError(
                 f"xmemory write {status.write_id} not found",
                 {"write_id": status.write_id},

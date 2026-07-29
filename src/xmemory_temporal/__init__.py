@@ -18,6 +18,8 @@ from xmemory_temporal.config import XmemoryConfig, XmemoryTimeouts
 from xmemory_temporal.dto import (
     ReadInput,
     ReadOutput,
+    ReadScope,
+    ScopeObject,
     SubAnswer,
     WriteInput,
     WriteOutput,
@@ -42,6 +44,8 @@ __all__ = [
     "XmemoryInstanceProtocol",
     "ReadInput",
     "ReadOutput",
+    "ReadScope",
+    "ScopeObject",
     "SubAnswer",
     "WriteInput",
     "WriteOutput",

@@ -114,3 +114,24 @@ class UserWorkflow:
     @workflow.run
     async def run(self, payload: str) -> str:
         return await workflow.execute_activity("user_activity", payload, start_to_close_timeout=timedelta(seconds=30))
+
+
+@workflow.defn
+class ZeroPollDurableWriteWorkflow:
+    """Durable write with an explicit zero poll interval.
+
+    `timedelta(0)` is falsy, so a `default or ...` resolution would silently
+    replace it with 2s. The test reads the timer durations out of history to
+    prove the explicit zero survived.
+    """
+
+    @workflow.run
+    async def run(self, text: str) -> str:
+        mem = xmemory_for_workflow()
+        out = await mem.write_durable(
+            text,
+            poll_interval=timedelta(0),
+            max_poll_interval=timedelta(0),
+            max_wait=timedelta(minutes=15),
+        )
+        return out.write_status

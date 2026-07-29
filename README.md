@@ -105,6 +105,29 @@ two can never disagree: lowering a workflow's budget lowers the client's with it
 `XmemoryTimeouts` supplies the defaults (120s read, 180s write, 30s enqueue and
 poll); `XmemoryConfig(client_margin_seconds=...)` tunes the gap between the two.
 
+## Durable writes
+
+`write_durable(text)` enqueues a deep write and polls it to completion from the
+workflow, so the wait is a Temporal timer in server-side history rather than a
+blocked activity slot. Redeploy the worker fleet mid-write and nothing is lost:
+the poll loop resumes on the new worker and completes.
+
+```python
+status = await mem.write_durable(text, max_wait=timedelta(minutes=15))
+```
+
+Each poll adds an activity and a timer to workflow history: roughly 105 events at
+the defaults (15 minutes), about 1,500 for a four-hour wait. A long `max_wait`
+with a short `max_poll_interval` can approach Temporal's per-workflow event
+limit, and the loop logs a warning once Temporal itself suggests continuing as
+new. This helper cannot call `continue_as_new` for you, since it runs inside
+*your* workflow and restarting that would discard your state. For multi-hour
+waits, run `write_durable` in a child workflow, where continue-as-new is yours to
+use.
+
+For the fire-and-forget pattern (kick off several writes, keep working, join
+before the turn ends), `write_async_start()` and `write_status()` are public too.
+
 ## Credentials never reach workflow history
 
 The config holds the **name** of the environment variable that supplies the API
@@ -187,7 +210,7 @@ Plus three raised by the durable write loop (`write_durable`), from a polled
 | durable-write outcome | `type` |
 |---|---|
 | the queued write reported `failed` | `XmemoryWriteFailed` |
-| the queued write id was `not_found` past a grace window | `XmemoryWriteNotFound` |
+| the queued write id was `not_found` | `XmemoryWriteNotFound` |
 | polling exceeded `max_wait` | `XmemoryWriteTimeout` |
 
 An unrecognized error code stays retryable and never raises — a stricter client
