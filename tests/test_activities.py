@@ -9,7 +9,6 @@ from temporalio.testing import ActivityEnvironment
 
 from xmemory_temporal import XmemoryConfig, XmemoryTimeouts, errors
 from xmemory_temporal.activities import XmemoryActivities
-from xmemory_temporal.config import client_timeout_seconds
 from xmemory_temporal.dto import ReadInput, WriteInput, WriteStatusInput
 
 from .fakes import FakeXmemoryInstance, api_error
@@ -162,15 +161,44 @@ async def test_client_timeout_tracks_the_activity_deadline() -> None:
         assert used < budget.total_seconds(), f"client must give up first for a {budget} budget"
 
 
-async def test_client_timeout_falls_back_without_a_deadline() -> None:
-    # Only reachable when a caller schedules with schedule_to_close alone; the
-    # package defaults stand in rather than leaving the client unbounded.
+async def test_client_timeout_raises_without_a_deadline() -> None:
+    # Temporal requires one of the two close timeouts, so this is unreachable in
+    # practice; assert the *typed* failure rather than merely "something raised",
+    # because to_application_error would turn a re-mapped one into a retryable
+    # XmemoryUnknown and retry a misconfiguration that can never come good.
     fake = FakeXmemoryInstance(read_answer="ok")
     acts = _acts(fake)
     env = ActivityEnvironment()
-    env.info = dataclasses.replace(env.info, start_to_close_timeout=None)
+    env.info = dataclasses.replace(
+        env.info,
+        start_to_close_timeout=None,
+        schedule_to_close_timeout=None,
+    )
+
+    with pytest.raises(ApplicationError) as ei:
+        await env.run(acts.read, ReadInput(query="q"))
+
+    assert ei.value.type == errors.TYPE_NO_DEADLINE
+    assert ei.value.non_retryable is True
+    assert fake.calls == []
+
+
+async def test_schedule_to_close_alone_is_a_valid_deadline() -> None:
+    # The only shape that reaches the second half of the `or`.
+    fake = FakeXmemoryInstance(read_answer="ok")
+    acts = _acts(fake)
+    env = ActivityEnvironment()
+    budget = timedelta(seconds=45)
+    env.info = dataclasses.replace(
+        env.info,
+        start_to_close_timeout=None,
+        schedule_to_close_timeout=budget,
+    )
+
     await env.run(acts.read, ReadInput(query="q"))
-    assert fake.calls[-1].kwargs["timeout"] == client_timeout_seconds(XmemoryTimeouts().read_seconds)
+
+    used = fake.calls[-1].kwargs["timeout"]
+    assert used < budget.total_seconds(), "the client must still give up first"
 
 
 def test_workflow_defaults_match_the_shared_timeout_defaults() -> None:
