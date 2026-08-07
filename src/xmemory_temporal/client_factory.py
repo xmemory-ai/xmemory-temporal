@@ -3,8 +3,9 @@
 Per-invocation clients would mean a TCP+TLS handshake per memory op.
 """
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -18,7 +19,7 @@ async def open_instance(
     *,
     api_key: str | None = None,
     http_client: httpx.AsyncClient | None = None,
-) -> AsyncIterator[XmemoryInstanceProtocol]:
+) -> AsyncGenerator[XmemoryInstanceProtocol, None]:
     """Yield a bound instance handle, closing the client on exit.
 
     ``api_key`` overrides the environment lookup; ``http_client`` supplies a
