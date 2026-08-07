@@ -11,7 +11,7 @@ from typing import Any, Callable
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from xmemory_temporal.config import XmemoryConfig, XmemoryTimeouts, client_timeout_seconds
+from xmemory_temporal.config import XmemoryConfig, client_timeout_seconds
 from xmemory_temporal.dto import (
     ReadInput,
     ReadOutput,
@@ -25,7 +25,7 @@ from xmemory_temporal.dto import (
     project_write_start,
     project_write_status,
 )
-from xmemory_temporal.errors import TYPE_NOT_BOUND, to_application_error
+from xmemory_temporal.errors import TYPE_NO_DEADLINE, TYPE_NOT_BOUND, to_application_error
 from xmemory_temporal.protocol import XmemoryInstanceProtocol
 
 # Pinned so renaming a method cannot break replay of in-flight workflows.
@@ -33,10 +33,6 @@ ACTIVITY_READ = "xmemory_read"
 ACTIVITY_WRITE = "xmemory_write"
 ACTIVITY_WRITE_START = "xmemory_write_start"
 ACTIVITY_WRITE_STATUS = "xmemory_write_status"
-
-# Used only when Temporal reports no per-attempt deadline (schedule_to_close only).
-_FALLBACK_BUDGET = XmemoryTimeouts()
-
 
 # A ContextVar, not an attribute: one plugin object is shared across every Worker
 # built from a Client, so an attribute would be last-bind-wins and a Worker could
@@ -76,22 +72,35 @@ class XmemoryActivities:
             )
         return inst
 
-    def _client_timeout(self, fallback_seconds: int) -> float:
+    def _client_timeout(self) -> float:
         """Client budget for this call, derived from the activity's own deadline.
 
         Deriving it, rather than keeping a second worker-side copy, is what
         makes "the client gives up first" hold by construction when a workflow
         lowers its timeout.
+
+        Temporal requires one of the two close timeouts on every activity, so
+        the ``None`` branch is unreachable in practice; both fields are typed
+        optional, and a silent default there is exactly the second copy this
+        design exists to avoid.
         """
-        budget = activity.info().start_to_close_timeout
-        seconds = budget.total_seconds() if budget is not None else fallback_seconds
-        return client_timeout_seconds(seconds, self._config.client_margin_seconds)
+        info = activity.info()
+        budget = info.start_to_close_timeout or info.schedule_to_close_timeout
+        if budget is None:
+            raise ApplicationError(
+                f"activity {info.activity_type} was scheduled without a deadline: set "
+                "start_to_close_timeout or schedule_to_close_timeout on it.",
+                type=TYPE_NO_DEADLINE,
+                non_retryable=True,
+            )
+        return client_timeout_seconds(budget.total_seconds(), self._config.client_margin_seconds)
 
     @activity.defn(name=ACTIVITY_READ)
     async def read(self, request: ReadInput) -> ReadOutput:
-        # Outside the try: an unbound-client error must keep its non-retryable
-        # ApplicationError rather than being re-mapped.
+        # Outside the try: an unbound-client or missing-deadline error must keep
+        # its non-retryable ApplicationError rather than being re-mapped.
         instance = self.instance
+        timeout = self._client_timeout()
         kwargs: dict[str, Any] = {}
         if request.read_mode is not None:
             kwargs["read_mode"] = request.read_mode
@@ -107,7 +116,7 @@ class XmemoryActivities:
         try:
             result = await instance.read(
                 request.query,
-                timeout=self._client_timeout(_FALLBACK_BUDGET.read_seconds),
+                timeout=timeout,
                 **kwargs,
             )
         except Exception as exc:
@@ -120,10 +129,11 @@ class XmemoryActivities:
     @activity.defn(name=ACTIVITY_WRITE)
     async def write(self, request: WriteInput) -> WriteOutput:
         instance = self.instance
+        timeout = self._client_timeout()
         try:
             result = await instance.write(
                 request.text,
-                timeout=self._client_timeout(_FALLBACK_BUDGET.write_seconds),
+                timeout=timeout,
                 **self._write_kwargs(request),
             )
         except Exception as exc:
@@ -133,10 +143,11 @@ class XmemoryActivities:
     @activity.defn(name=ACTIVITY_WRITE_START)
     async def write_start(self, request: WriteInput) -> WriteStartOutput:
         instance = self.instance
+        timeout = self._client_timeout()
         try:
             result = await instance.write_async(
                 request.text,
-                timeout=self._client_timeout(_FALLBACK_BUDGET.write_start_seconds),
+                timeout=timeout,
                 **self._write_kwargs(request),
             )
         except Exception as exc:
@@ -146,10 +157,11 @@ class XmemoryActivities:
     @activity.defn(name=ACTIVITY_WRITE_STATUS)
     async def write_status(self, request: WriteStatusInput) -> WriteStatusOutput:
         instance = self.instance
+        timeout = self._client_timeout()
         try:
             result = await instance.write_status(
                 request.write_id,
-                timeout=self._client_timeout(_FALLBACK_BUDGET.write_status_seconds),
+                timeout=timeout,
             )
         except Exception as exc:
             raise to_application_error(exc) from None

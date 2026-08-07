@@ -220,6 +220,7 @@ derived from the server's error codes:
 | `NOT_FOUND` | `XmemoryNotFound` | no |
 | validation / conflict / schema-evolution rejections | `XmemoryBadRequest` / `XmemorySchemaRejected` | no |
 | activities registered without the plugin | `XmemoryNotBound` | no |
+| an activity scheduled with neither close timeout | `XmemoryNoDeadline` | no |
 | an unrecognized code | `XmemoryUnknown` | yes (never fatal) |
 
 Plus three raised by the durable write loop (`write_durable`), from a polled

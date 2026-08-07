@@ -56,6 +56,10 @@ TYPE_WRITE_FAILED = "XmemoryWriteFailed"
 TYPE_WRITE_NOT_FOUND = "XmemoryWriteNotFound"
 TYPE_WRITE_TIMEOUT = "XmemoryWriteTimeout"
 TYPE_NOT_BOUND = "XmemoryNotBound"
+# Worker-side misconfiguration raised by activities.py, kept distinct from
+# NotBound because the remedy differs: one is a missing plugin registration, the
+# other an activity scheduled with neither close timeout.
+TYPE_NO_DEADLINE = "XmemoryNoDeadline"
 TYPE_UNKNOWN = "XmemoryUnknown"
 
 NON_RETRYABLE_TYPES: tuple[str, ...] = (
@@ -69,6 +73,7 @@ NON_RETRYABLE_TYPES: tuple[str, ...] = (
     TYPE_WRITE_NOT_FOUND,
     TYPE_WRITE_TIMEOUT,
     TYPE_NOT_BOUND,
+    TYPE_NO_DEADLINE,
 )
 
 # Fixed, history-safe messages. Never include the raw exception string.
