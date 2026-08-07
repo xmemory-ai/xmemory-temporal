@@ -51,6 +51,9 @@ reportMissingImports = true
 reportMissingTypeStubs = false
 reportImportCycles = true
 reportImplicitOverride = "error"
+# Off in "standard" mode, so an SDK or typeshed deprecation would otherwise only
+# ever show up in an editor.
+reportDeprecated = "error"
 
 [tool.pytest.ini_options]
 # Deliberately no --testmon: the root addopts are root-only and testmon state
