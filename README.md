@@ -105,8 +105,8 @@ mem = xmemory_for_workflow(
 
 Because the client timeout is *derived* rather than configured separately, the
 two can never disagree: lowering a workflow's budget lowers the client's with it.
-`XmemoryTimeouts` supplies the defaults (120s read, 180s write, 30s enqueue and
-poll); `XmemoryConfig(client_margin_seconds=...)` tunes the gap between the two.
+`XmemoryTimeouts` supplies the defaults for any budget you do not set;
+`XmemoryConfig(client_margin_seconds=...)` tunes the gap between the two.
 
 ## Durable writes
 

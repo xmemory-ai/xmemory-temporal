@@ -11,15 +11,17 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
     # `SimplePlugin` and `execute_activity(..., summary=)` are the floor.
     # Capped below 2 because the plugin surface is young and still moving.
     "temporalio>=1.30,<2",
-    # 0.11 is the first MIT release (matches this package's license) and the one
-    # that dropped TRIAL_ENDED from the documented error contract.
+    # 0.12 is the floor for structured writes (`structured_mutations`). It is also
+    # MIT, matching this package's license, as every release from 0.11 on is.
     "xmemory-ai>=0.12",
 ]
 

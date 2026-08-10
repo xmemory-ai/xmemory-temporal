@@ -143,7 +143,7 @@ def test_max_retries_exceeded_is_non_retryable() -> None:
 
 
 def test_client_side_input_error_fails_fast() -> None:
-    # F11(2): a deterministic client-side error (e.g. a malformed read_mode/scope
+    # A deterministic client-side error (e.g. a malformed read_mode/scope
     # rejected while building the request) is not an API error and must be
     # non-retryable — a retry replays the same bad input.
     app = to_application_error(ValueError("bad scope"))

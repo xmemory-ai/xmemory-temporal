@@ -120,7 +120,7 @@ def _failure_chain_text(failure) -> str:
 
 
 async def test_no_transport_detail_in_serialized_failure_chain() -> None:
-    # F3 / N2: the raw transport string must not reach the failure Temporal
+    # The raw transport string must not reach the failure Temporal
     # persists to cleartext history — not in the message AND not in the cause
     # chain. `raise ... from None` drops __cause__ and suppresses __context__;
     # `from exc` (or a bare raise) would re-leak the unsanitized XmemoryAPIError.

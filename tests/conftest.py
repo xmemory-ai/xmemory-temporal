@@ -1,4 +1,4 @@
-"""Shared fixtures: a time-skipping Temporal environment and a task-queue id."""
+"""Shared fixtures: a time-skipping Temporal environment."""
 
 from collections.abc import AsyncIterator
 

@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         # Floor (3.10, matching xmemory-ai) through current.
-        python: ["3.10", "3.12", "3.13"]
+        python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

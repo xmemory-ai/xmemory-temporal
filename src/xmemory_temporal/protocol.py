@@ -1,7 +1,8 @@
-"""The four client methods this plugin uses, as a structural Protocol.
+"""The client methods this plugin uses, as a structural Protocol.
 
-Depending on four of ``AsyncInstanceAPI``'s fourteen keeps client API churn from
-breaking us, and lets tests substitute a fake with no patching.
+Depending on the handful we call, rather than on ``AsyncInstanceAPI`` itself,
+keeps client API churn from breaking us and lets tests substitute a fake with no
+patching.
 """
 
 from typing import Any, Protocol, runtime_checkable
