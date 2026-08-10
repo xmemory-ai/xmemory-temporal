@@ -3,8 +3,7 @@
 Skipped unless ``XMEM_API_KEY`` and ``XMEM_INSTANCE_ID`` are set. Run before a
 release:
 
-    XMEM_API_KEY=xmem_... XMEM_INSTANCE_ID=... \\
-        uv run --directory integrations/temporal/python pytest -m live
+    XMEM_API_KEY=xmem_... XMEM_INSTANCE_ID=... uv run pytest -m live
 
 It writes a fact and then reads it back through real activities, proving the
 whole path — plugin, client, and durable write loop — works against production
