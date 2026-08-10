@@ -102,7 +102,7 @@ async def test_two_phase_intermediate_states_are_non_terminal(env: WorkflowEnvir
 
 
 async def test_unknown_status_keeps_polling(env: WorkflowEnvironment) -> None:
-    # F5: a status the client enum does not know (a future server state added
+    # A status the client enum does not know (a future server state added
     # during a rolling deploy) must be treated as non-terminal — keep polling —
     # NOT fail the in-flight durable write. Here an unknown state precedes
     # completion; the loop rides through it.
