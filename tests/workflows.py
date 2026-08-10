@@ -117,6 +117,15 @@ class UserWorkflow:
 
 
 @workflow.defn
+class ShortDeadlineUserWorkflow:
+    """The same activity on a deadline too tight to fit a capture enqueue."""
+
+    @workflow.run
+    async def run(self, payload: str) -> str:
+        return await workflow.execute_activity("user_activity", payload, start_to_close_timeout=timedelta(seconds=1))
+
+
+@workflow.defn
 class ZeroPollDurableWriteWorkflow:
     """Durable write with an explicit zero poll interval.
 
