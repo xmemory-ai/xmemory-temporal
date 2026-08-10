@@ -8,7 +8,7 @@ from temporalio.worker import Worker
 from xmemory_temporal import AutoCaptureConfig, XmemoryConfig, XmemoryPlugin
 
 from .fakes import FakeXmemoryInstance
-from .workflows import UserWorkflow, WriteWorkflow, user_activity
+from .workflows import ShortDeadlineUserWorkflow, UserWorkflow, WriteWorkflow, user_activity
 
 
 async def _run(env: WorkflowEnvironment, fake: FakeXmemoryInstance, auto_capture: AutoCaptureConfig) -> None:
@@ -82,6 +82,45 @@ async def test_own_write_activity_is_not_captured(env: WorkflowEnvironment) -> N
         await env.client.execute_workflow(WriteWorkflow.run, "remember me", id=f"wf-{uuid.uuid4()}", task_queue=tq)
     assert fake.count("write") == 1  # the user's write happened
     assert fake.count("write_async") == 0  # its result was NOT captured (guard worked)
+
+
+async def test_capture_is_skipped_when_the_activity_deadline_leaves_no_room(env: WorkflowEnvironment) -> None:
+    # Capture runs inside the wrapped activity, so it spends that activity's
+    # budget. On a deadline this tight the enqueue must be dropped rather than
+    # pushing the activity over it: a timeout there would fail, and retry, an
+    # activity that had already produced its result.
+    fake = FakeXmemoryInstance()
+    tq = f"tq-{uuid.uuid4()}"
+    plugin = XmemoryPlugin(
+        XmemoryConfig(instance_id="inst-1"),
+        instance=fake,
+        auto_capture=AutoCaptureConfig(project=lambda name, result: f"[{name}] {result}"),
+    )
+    async with Worker(
+        env.client,
+        task_queue=tq,
+        workflows=[ShortDeadlineUserWorkflow],
+        activities=[user_activity],
+        plugins=[plugin],
+    ):
+        out = await env.client.execute_workflow(
+            ShortDeadlineUserWorkflow.run, "hello", id=f"wf-{uuid.uuid4()}", task_queue=tq
+        )
+
+    assert out == "handled: hello"  # the wrapped activity is untouched
+    assert fake.count("write_async") == 0  # capture was dropped, not attempted
+
+
+def test_capture_budget_never_outlives_the_activity_deadline() -> None:
+    # The arithmetic behind the skip above, without the wall-clock.
+    from xmemory_temporal.interceptor import capture_budget_seconds
+
+    # Fresh activity, plenty of room: the configured ceiling applies.
+    assert capture_budget_seconds(30.0, 0.5, 5.0, 5.0) == 5.0
+    # Partly spent: the remainder wins over the ceiling.
+    assert capture_budget_seconds(30.0, 22.0, 5.0, 5.0) == 3.0
+    # Nothing left once the margin is honored: skip rather than overrun.
+    assert capture_budget_seconds(30.0, 27.0, 5.0, 5.0) is None
 
 
 def test_sampling_bucket_is_stable_and_crc32_based() -> None:

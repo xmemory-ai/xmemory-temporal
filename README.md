@@ -255,9 +255,10 @@ plugin = XmemoryPlugin(
 Off by default. It runs as an **Activity** interceptor (outside the replay
 path), requires a `project` function that decides what — if anything — to
 remember, samples to bound fan-out, and never fails the wrapped activity if a
-capture write errors. Capture is an **enqueue** (`write_async`) bounded by a
-short timeout, so it can never slow the wrapped activity past its
-`start_to_close`.
+capture write errors. Capture is an **enqueue** (`write_async`), and because it
+runs inside the wrapped activity it is clamped to whatever that activity has
+left of its own deadline — and skipped outright when nothing is left — so it
+cannot push the activity past its `start_to_close` and get it retried.
 
 > **Naming caveat.** Auto-capture skips any activity whose name starts with
 > `xmemory_` (to avoid capturing its own writes). If you name one of *your* own

@@ -8,12 +8,14 @@ under cache eviction or a worker restart. Activity interceptors sit outside the
 replay path.
 
 Four guardrails: a user-supplied ``project`` decides what to remember (``None``
-skips); ``sample_rate`` bounds fan-out; capture is an enqueue bounded well below
-the wrapped activity's budget; and a capture failure never fails that activity.
+skips); ``sample_rate`` bounds fan-out; capture is an enqueue clamped to what is
+left of the wrapped activity's own deadline, and skipped when nothing is left;
+and a capture failure never fails that activity.
 """
 
 import asyncio
 import logging
+import time
 import zlib
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -52,7 +54,9 @@ class AutoCaptureConfig:
     # opt-in). Deterministic per activity id, so a retry samples the same way.
     sample_rate: float = 1.0
     extraction_logic: str = "fast"
-    # Cap on what a capture enqueue may add to the wrapped activity's budget.
+    # Ceiling on what a capture enqueue may add to the wrapped activity's
+    # elapsed time. The interceptor lowers it further when less than this is
+    # left of the activity's deadline.
     capture_timeout_seconds: float = 5.0
 
 
@@ -91,16 +95,20 @@ class _AutoCaptureActivityInbound(ActivityInboundInterceptor):
 
     @override
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
+        # Stamped here, not from ``info().started_time``: capture runs on this
+        # worker's clock, and a monotonic reading cannot skew against the
+        # server's.
+        started = time.monotonic()
         result = await self.next.execute_activity(input)
         try:
-            await self._maybe_capture(result)
+            await self._maybe_capture(result, started)
         except (Exception, asyncio.TimeoutError):
-            # Never let capture fail — or exceed its own budget on — the wrapped
+            # Never let capture fail, or exceed its own budget on, the wrapped
             # activity. Swallow errors and timeouts alike.
             logger.warning("xmemory auto-capture skipped; the wrapped activity is unaffected", exc_info=True)
         return result
 
-    async def _maybe_capture(self, result: Any) -> None:
+    async def _maybe_capture(self, result: Any, started: float) -> None:
         name = activity.info().activity_type
         if name.startswith(_OWN_ACTIVITY_PREFIX):
             return
@@ -109,12 +117,26 @@ class _AutoCaptureActivityInbound(ActivityInboundInterceptor):
         text = self._auto_capture.project(name, result)
         if not text:
             return
-        # Enqueue (write_async), not a full synchronous write, and bound it hard
-        # below the wrapped activity's budget. Deep extraction still happens
-        # server-side; we do not wait for it.
+        budget = self._capture_budget(started)
+        if budget is None:
+            logger.debug("xmemory auto-capture skipped: the wrapped activity's deadline is spent")
+            return
+        # Enqueue (write_async), not a full synchronous write. Deep extraction
+        # still happens server-side; we do not wait for it.
         await asyncio.wait_for(
             self._activities.write_start(WriteInput(text=text, extraction_logic=self._auto_capture.extraction_logic)),
-            timeout=self._auto_capture.capture_timeout_seconds,
+            timeout=budget,
+        )
+
+    def _capture_budget(self, started: float) -> float | None:
+        deadline = activity.info().start_to_close_timeout or activity.info().schedule_to_close_timeout
+        if deadline is None:
+            return None
+        return capture_budget_seconds(
+            deadline.total_seconds(),
+            time.monotonic() - started,
+            self._auto_capture.capture_timeout_seconds,
+            self._config.client_margin_seconds,
         )
 
     def _should_sample(self) -> bool:
@@ -124,6 +146,26 @@ class _AutoCaptureActivityInbound(ActivityInboundInterceptor):
         if rate <= 0.0:
             return False
         return sampling_bucket(activity.info().activity_id) < rate
+
+
+def capture_budget_seconds(
+    deadline_seconds: float,
+    elapsed_seconds: float,
+    ceiling_seconds: float,
+    margin_seconds: float,
+) -> float | None:
+    """Seconds capture may take, or ``None`` when it must be skipped.
+
+    Capture runs inside the wrapped activity, so whatever it spends counts
+    against that activity's deadline. A flat ceiling is not enough: an activity
+    that has nearly used its budget would be pushed past it and retried by
+    Temporal, discarding a result it had already produced. Best-effort capture
+    is worth skipping to avoid that.
+    """
+    remaining = deadline_seconds - elapsed_seconds - margin_seconds
+    if remaining <= 0:
+        return None
+    return min(ceiling_seconds, remaining)
 
 
 def sampling_bucket(activity_id: str) -> float:
