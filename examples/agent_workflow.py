@@ -1,7 +1,7 @@
 """A tiny agent-shaped workflow that remembers and recalls through xmemory.
 
-This is the migration story the partner guide asks for: the workflow reads and
-writes memory with the same calls a non-Temporal agent would make against
+The migration story in miniature: the workflow reads and writes memory with
+the same calls a non-Temporal agent would make against
 ``xmemory.AsyncInstanceAPI`` — only the handle differs.
 """
 

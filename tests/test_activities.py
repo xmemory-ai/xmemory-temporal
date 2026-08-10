@@ -145,7 +145,7 @@ async def test_no_transport_detail_in_serialized_failure_chain() -> None:
 
 
 async def test_client_timeout_tracks_the_activity_deadline() -> None:
-    # The reviewer-facing invariant: the client budget is derived from the
+    # The invariant this redesign exists for: the client budget derives from the
     # deadline Temporal assigned this attempt, so a workflow that lowers its
     # start_to_close lowers the client timeout with it. Previously the client
     # read a separate worker-side number and a short workflow budget silently

@@ -1,4 +1,4 @@
-"""The error-classification table — the artifact Temporal's review asks for.
+"""The error-classification table: every xmemory error, and its retry verdict.
 
 Each case asserts the ``type=`` string and the retryability verdict, driven by
 constructing an ``XmemoryAPIError`` exactly as the client would. The unknown-code

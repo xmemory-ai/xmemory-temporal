@@ -1,4 +1,4 @@
-"""The side-effects-on-replay test Temporal's review specifically asks for.
+"""Memory operations must not repeat when a workflow replays.
 
 ``Worker(..., max_cached_workflows=0)`` evicts the workflow after every task, so
 the workflow is replayed from history on each step — the condition under which a
@@ -7,10 +7,10 @@ non-replay-safe implementation duplicates its side effects.
 Two assertions per workflow:
 
 * **history-level** — N logical memory ops produce exactly N
-  ``ActivityTaskScheduled`` events, the retry-independent pattern Temporal's
-  guide names (each intended call is one scheduled event no matter how many times
-  the activity retries or the workflow replays). This is exact for the single /
-  read-then-write / double-write workflows.
+  ``ActivityTaskScheduled`` events. Counting scheduled events is retry-
+  independent: each intended call is one scheduled event no matter how many
+  times the activity retries or the workflow replays. This is exact for the
+  single / read-then-write / double-write workflows.
 * **ledger-level** — the injected fake saw each write exactly once. For the
   durable-write workflow the poll loop makes the scheduled-event total variable,
   so there the history count is only a lower bound (``>= 1``) and the ledger's

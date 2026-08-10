@@ -8,8 +8,7 @@ Rules:
 
 * Branch on ``.code``, never the bare HTTP status.
 * An unrecognized *code* is retryable, never fatal — a stricter reader that
-  crashes on a value a newer server emits breaks during rolling deploys
-  (``maxims/SERIALIZATION.md``).
+  crashes on a value a newer server emits breaks during rolling deploys.
 * A deterministic *client-side* error (a malformed request the server never
   saw) is the opposite: non-retryable, because retrying replays the same bad
   input.
