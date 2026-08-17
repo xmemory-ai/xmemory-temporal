@@ -8,26 +8,100 @@ on:
 
 permissions:
   contents: read
-  id-token: write # PEP 740 attestations (provenance) + optional Trusted Publishing
 
 jobs:
-  pypi:
+  # Everything that runs repository code runs here, with no id-token and no
+  # publishing credentials: a compromised dependency or test cannot reach either.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          python-version: "3.12"
+          # Without this the action installs whatever uv is newest, so two runs of
+          # the same tag can build with different tooling.
+          version: "0.9.13"
+      - name: Check the release tag matches pyproject
+        # A mismatch here publishes a version nobody tagged, or fails after the
+        # release is already announced.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(uv run --no-project python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          test "$tag" = "$pkg" || { echo "tag $tag != package version $pkg"; exit 1; }
+      - name: Install (locked)
+        # --locked, or a drifted lockfile would silently resolve to versions the
+        # release was never tested against.
+        run: uv sync --dev --locked
+      - name: Lint + format check
+        run: |
+          uv run ruff check src tests examples
+          uv run ruff format --check src tests examples
+      - name: Type check
+        run: uv run pyright src tests examples
+      - name: Test
+        run: uv run pytest
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Check the built distributions
+        # --strict, so a metadata warning fails the release instead of scrolling
+        # past. twine says nothing about file contents, so the license files are
+        # asserted separately: their absence is only visible once published.
+        #
+        # Inspected in Python, not `tar -tzf | grep -q`: grep exits on its first
+        # match, tar takes SIGPIPE, and under the `pipefail` this shell runs with
+        # the pipeline fails — reporting the file missing when it is present.
+        run: |
+          uv run --no-project --with "twine==6.2.0" --with "packaging==25.0" --with "readme-renderer==45.0" \
+            twine check --strict dist/*
+          uv run --no-project python - <<'PY'
+          import glob, sys, tarfile, zipfile
+
+          required = ("LICENSE", "NOTICE")
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          wheel = glob.glob("dist/*.whl")[0]
+          names = tarfile.open(sdist).getnames()
+          missing = [f for f in required if not any(n.endswith(f"/{f}") for n in names)]
+          if missing:
+              sys.exit(f"{', '.join(missing)} missing from {sdist}")
+          names = zipfile.ZipFile(wheel).namelist()
+          missing = [f for f in required if f"licenses/{f}" not in " ".join(names)]
+          if missing:
+              sys.exit(f"{', '.join(missing)} missing from {wheel}")
+          print("LICENSE and NOTICE present in both artifacts")
+          PY
+      - name: Upload the artifacts for the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # Nothing from the repository executes here: it only downloads the artifacts the
+  # job above already verified and hands them to PyPI. That keeps the OIDC token
+  # and the publishing credential away from build and test code.
+  publish:
+    needs: verify
     runs-on: ubuntu-latest
     # Configure this environment's protection rules / Trusted Publishing on PyPI.
     environment: pypi
+    permissions:
+      contents: read
+      id-token: write # PEP 740 attestations (provenance) + optional Trusted Publishing
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - name: Download the verified artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          python-version: "3.12"
-      - name: Build sdist + wheel
-        run: uv build
+          name: dist
+          path: dist/
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           # TOKEN: set the PYPI_API_TOKEN secret before the first release.
-          # Alternatively, configure PyPI Trusted Publishing for this repo +
-          # `pypi` environment and DELETE the `password:` line — OIDC then
-          # authenticates with no stored token.
+          #
+          # Prefer Trusted Publishing: configure it for this repo + the `pypi`
+          # environment and DELETE the `password:` line. OIDC then authenticates with
+          # no stored token AND attestations are produced — this action *disables*
+          # PEP 740 attestations whenever a password/token is supplied, so the
+          # `id-token: write` permission below buys nothing in this mode.
           password: ${{ secrets.PYPI_API_TOKEN }}
-          # Provenance attestations are generated automatically (id-token: write).

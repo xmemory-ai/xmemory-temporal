@@ -15,7 +15,7 @@ from .workflows import ReadWorkflow, WriteWorkflow
 
 
 def _plugin(fake: FakeXmemoryInstance) -> XmemoryPlugin:
-    return XmemoryPlugin(XmemoryConfig(instance_id="inst-1"), instance=fake)
+    return XmemoryPlugin(XmemoryConfig(instance_id="inst-1", allow_unmeasurable_clock=True), instance=fake)
 
 
 async def _worker(env: WorkflowEnvironment, fake: FakeXmemoryInstance, tq: str) -> Worker:

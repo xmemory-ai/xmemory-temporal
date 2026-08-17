@@ -100,17 +100,17 @@ class WriteStatusInput:
 class WriteStatusOutput:
     write_id: str
     write_status: str
-    error_detail: str | None = None
+    # No `error_detail`: activity results are persisted to cleartext history. The
+    # write_status activity logs its size, or the detail itself when
+    # log_server_error_detail is on.
     completed_at: str | None = None
-    # What the write applied. None until xmemory-ai surfaces it on write_status
-    # (see project_write_status); kept for symmetry with WriteOutput.changes.
+    # What the write applied. None until the client surfaces it on write_status.
     changes: Any = None
 
 
 # --- Projections from the client's models ----------------------------------
-# `getattr` with defaults rather than attribute access: an older or newer client
-# release may not carry every field, and a missing one should degrade to `None`
-# rather than raise inside an activity.
+# `getattr` with defaults, not attribute access: a client release may not carry
+# every field, and a missing one should degrade to `None` rather than raise.
 
 
 def project_read(result: Any) -> ReadOutput:
@@ -149,12 +149,8 @@ def project_write_status(result: Any) -> WriteStatusOutput:
         # `WriteQueueStatus` is a `str` enum; normalize to its plain value so
         # history never embeds an enum class the workflow side must import.
         write_status=getattr(status, "value", status) or "",
-        error_detail=getattr(result, "error_detail", None),
         completed_at=completed_at.isoformat() if completed_at is not None else None,
-        # The server returns what the write applied, but xmemory-ai's
-        # WriteStatusResult does not surface it yet — so `changes` is None here
-        # (unlike sync `write`, which carries WriteResult.changes). Picked up via
-        # getattr so it auto-populates if a future client exposes it. Surfacing it
-        # is an upstream client follow-up.
+        # xmemory-ai's WriteStatusResult does not surface this yet, so it is
+        # None here; read via getattr so a future client release populates it.
         changes=getattr(result, "changes", None) or getattr(result, "result", None),
     )

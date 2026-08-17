@@ -125,6 +125,14 @@ Opt into write retries only when your primary keys are literal identifiers prese
 mem = xmemory_for_workflow(write_retry_policy=RetryPolicy(maximum_attempts=3))
 ```
 
+## What to know before you store anything
+
+> **Memory is untrusted data in both directions.** What goes in is user-controlled; what comes back is that text plus whatever the extraction engine made of it. Reading a memory into a prompt is the indirect prompt-injection path, so treat a read result as data to quote and bound, never as instructions — and never put it straight into a shell, a query, or a template.
+>
+> **One worker, one instance.** The activities are generic and bind to whichever instance the plugin configured, so every worker polling a task queue must share that configuration. Per-tenant isolation means a task queue (and worker) per tenant, and the tenant must come from an authenticated identity your service establishes — never from a caller- or model-supplied value. The example above writes and reads a single shared instance, naming the customer in the text rather than isolating them.
+>
+> **Auto-capture is at-least-once.** It runs inside the wrapped activity, and Temporal activities are at-least-once: if a worker dies after the capture enqueue but before the activity's completion is recorded, the activity runs again and captures again. Keep `project` cheap: the activity stops waiting at the capture budget, but a projector that blocks holds its thread until it returns, so later captures are skipped and the time it spends is time the activity is not finishing in.
+
 ## Handle errors with typed failures
 
 xmemory errors become `ApplicationError`s with stable `type` strings you can match in a `RetryPolicy` with `non_retryable_error_types`:
@@ -138,6 +146,9 @@ xmemory errors become `ApplicationError`s with stable `type` strings you can mat
 | `UNAUTHORIZED` / `FORBIDDEN` | `XmemoryAuthFailed` | no |
 | `NOT_FOUND` | `XmemoryNotFound` | no |
 | validation / schema-evolution rejections | `XmemoryBadRequest` / `XmemorySchemaRejected` | no |
+| durable-write options that cannot be honored | `XmemoryBadOptions` | no |
+| the activity's deadline is already spent | `XmemoryDeadlineExpired` | yes |
+| this worker's clock cannot time the attempt | `XmemoryClockUnusable` | yes — a synced worker can run it |
 | an unrecognized code | `XmemoryUnknown` | yes (never fatal) |
 
 The durable-write loop adds `XmemoryWriteFailed`, `XmemoryWriteNotFound`, and `XmemoryWriteTimeout`, all non-retryable.

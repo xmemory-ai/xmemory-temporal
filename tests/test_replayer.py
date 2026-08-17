@@ -30,7 +30,7 @@ async def _record(env: WorkflowEnvironment, fake: FakeXmemoryInstance, workflow,
         env.client,
         task_queue=tq,
         workflows=[workflow],
-        plugins=[XmemoryPlugin(XmemoryConfig(instance_id="inst-1"), instance=fake)],
+        plugins=[XmemoryPlugin(XmemoryConfig(instance_id="inst-1", allow_unmeasurable_clock=True), instance=fake)],
     ):
         wf_id = f"wf-{uuid.uuid4()}"
         await env.client.execute_workflow(workflow.run, arg, id=wf_id, task_queue=tq)
@@ -44,7 +44,11 @@ async def test_replay_read_then_write(env: WorkflowEnvironment) -> None:
 
     replayer = Replayer(
         workflows=[ReadThenWriteWorkflow],
-        plugins=[XmemoryPlugin(XmemoryConfig(instance_id="inst-1"), instance=FakeXmemoryInstance())],
+        plugins=[
+            XmemoryPlugin(
+                XmemoryConfig(instance_id="inst-1", allow_unmeasurable_clock=True), instance=FakeXmemoryInstance()
+            )
+        ],
     )
     # Raises on any nondeterminism.
     await replayer.replay_workflow(history)
@@ -59,6 +63,10 @@ async def test_replay_durable_write(env: WorkflowEnvironment) -> None:
 
     replayer = Replayer(
         workflows=[DurableWriteWorkflow],
-        plugins=[XmemoryPlugin(XmemoryConfig(instance_id="inst-1"), instance=FakeXmemoryInstance())],
+        plugins=[
+            XmemoryPlugin(
+                XmemoryConfig(instance_id="inst-1", allow_unmeasurable_clock=True), instance=FakeXmemoryInstance()
+            )
+        ],
     )
     await replayer.replay_workflow(history)

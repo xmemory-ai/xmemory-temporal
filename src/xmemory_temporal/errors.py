@@ -22,6 +22,7 @@ Note ``402`` means ``QUOTA_EXCEEDED`` only — trials were removed end-to-end an
 """
 
 import asyncio
+import re
 import logging
 from datetime import timedelta
 from typing import Any
@@ -33,9 +34,8 @@ from temporalio.exceptions import ApplicationError
 logger = logging.getLogger(__name__)
 
 # --- Stable `type=` strings -------------------------------------------------
-# A public contract: users write `RetryPolicy(non_retryable_error_types=[...])`
-# against these, so renaming one is a breaking change. Pinned by literal-value
-# tests, not just round-tripped through the constants.
+# A public contract: users match on these in `RetryPolicy`, so renaming one is a
+# breaking change. Pinned by literal-value tests, not just via the constants.
 
 TYPE_UNAVAILABLE = "XmemoryUnavailable"
 TYPE_SERVER_ERROR = "XmemoryServerError"
@@ -47,10 +47,8 @@ TYPE_AUTH_FAILED = "XmemoryAuthFailed"
 TYPE_NOT_FOUND = "XmemoryNotFound"
 TYPE_BAD_REQUEST = "XmemoryBadRequest"
 TYPE_SCHEMA_REJECTED = "XmemorySchemaRejected"
-# Job-level outcomes of a durable (write_async) write, raised by the poll loop in
-# workflow_api.py rather than by to_application_error. Kept here so the full set
-# of public `type=` strings lives in one place, is pinned by tests, and is
-# documented in the README error table.
+# Job-level outcomes of a durable write, raised by the poll loop rather than by
+# to_application_error. Kept here so every public `type=` string lives together.
 TYPE_WRITE_FAILED = "XmemoryWriteFailed"
 TYPE_WRITE_NOT_FOUND = "XmemoryWriteNotFound"
 TYPE_WRITE_TIMEOUT = "XmemoryWriteTimeout"
@@ -59,6 +57,16 @@ TYPE_NOT_BOUND = "XmemoryNotBound"
 # NotBound because the remedy differs: one is a missing plugin registration, the
 # other an activity scheduled with neither close timeout.
 TYPE_NO_DEADLINE = "XmemoryNoDeadline"
+# The activity's deadline is already spent. Retryable: Temporal decides whether
+# another attempt still fits, and failing here only avoids a doomed request.
+TYPE_DEADLINE_EXPIRED = "XmemoryDeadlineExpired"
+# Caller-supplied options that cannot be honored, raised before any backend
+# call so a rejected option never leaves a queued write behind.
+TYPE_BAD_OPTIONS = "XmemoryBadOptions"
+# The worker clock disagrees with the service badly enough that the activity's
+# remaining time cannot be established. Retryable: another worker with a synced
+# clock can run this attempt, and refusing beats guessing.
+TYPE_CLOCK_UNUSABLE = "XmemoryClockUnusable"
 TYPE_UNKNOWN = "XmemoryUnknown"
 
 NON_RETRYABLE_TYPES: tuple[str, ...] = (
@@ -73,6 +81,7 @@ NON_RETRYABLE_TYPES: tuple[str, ...] = (
     TYPE_WRITE_TIMEOUT,
     TYPE_NOT_BOUND,
     TYPE_NO_DEADLINE,
+    TYPE_BAD_OPTIONS,
 )
 
 # Fixed, history-safe messages. Never include the raw exception string.
@@ -95,10 +104,8 @@ _MESSAGES: dict[str, str] = {
 _RETRYABLE_CODES = frozenset({"INTERNAL_ERROR", "SERVICE_UNAVAILABLE"})
 _AUTH_CODES = frozenset({"UNAUTHORIZED", "FORBIDDEN"})
 _BAD_REQUEST_CODES = frozenset({"VALIDATION_ERROR", "INVALID_INPUT", "ALREADY_EXISTS", "CONFLICT"})
-# A queued write that exhausted its own retry budget. The server normally
-# surfaces this item-embedded on write_status (handled by the poll loop's FAILED
-# branch), not as a request-level code — this mapping is defensive, in case a
-# future server returns it request-level. Retrying the request cannot help.
+# A queued write that exhausted its own retry budget. The server normally reports
+# this on write_status, so this mapping is defensive; retrying cannot help.
 _EXHAUSTED_CODES = frozenset({"MAX_RETRIES_EXCEEDED"})
 
 # Schema-evolution endpoints use lowercase discriminators; none succeed on retry.
@@ -112,6 +119,18 @@ _SCHEMA_CODES = frozenset(
         "migration_not_found",
         "instance_not_initialised",
     }
+)
+
+# Everything this module classifies. Only these may reach workflow history: an
+# unrecognized code is an unvetted server string, and identifier-shaped is not the
+# same as safe -- a value like `Alice_has_HIV` passes any shape test one can write.
+_KNOWN_CODES = frozenset(
+    {"QUOTA_EXCEEDED", "RATE_LIMITED", "NOT_FOUND"}
+    | _RETRYABLE_CODES
+    | _AUTH_CODES
+    | _BAD_REQUEST_CODES
+    | _EXHAUSTED_CODES
+    | _SCHEMA_CODES
 )
 
 _DAILY_QUOTA_KIND = "daily_quota_exceeded"
@@ -163,17 +182,43 @@ def _build(
 ) -> ApplicationError:
     return ApplicationError(
         _MESSAGES.get(error_type, "xmemory request failed"),
-        {"code": code, "status": status},
+        # Known codes only; see _KNOWN_CODES.
+        {"code": code if code in _KNOWN_CODES else None, "status": status},
         type=error_type,
         non_retryable=not retryable,
         next_retry_delay=delay if retryable else None,
     )
 
 
+# A server error code is an identifier, not free text. Anything else is either a
+# client bug or something that should not be persisted: `details` goes into
+# cleartext workflow history, and an unhashable value (a dict) would crash the
+# lookups below outright.
+_CODE_SHAPE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _safe_code(raw: Any) -> str | None:
+    """The code if it looks like a code, else ``None`` (with a shape-only log)."""
+    if raw is None:
+        return None
+    if isinstance(raw, str) and _CODE_SHAPE.match(raw):
+        return raw
+    logger.warning(
+        "xmemory returned an error code that is not an identifier (%s, %d chars); "
+        "ignoring it for classification and keeping it out of logs and workflow history",
+        type(raw).__name__,
+        len(raw) if isinstance(raw, (str, bytes)) else -1,
+    )
+    return None
+
+
 def to_application_error(exc: BaseException) -> ApplicationError:
     """Map any client-raised exception onto a Temporal ``ApplicationError``."""
-    code = getattr(exc, "code", None)
-    status = getattr(exc, "status", None)
+    raw_code = getattr(exc, "code", None)
+    code = _safe_code(raw_code)
+    raw_status = getattr(exc, "status", None)
+    # Same reasoning: only a plain integer status is persisted.
+    status = raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else None
 
     # Not an xmemory API error at all: either a transport failure (retryable) or
     # a deterministic client-side error like a malformed read_mode/scope that
@@ -203,7 +248,17 @@ def to_application_error(exc: BaseException) -> ApplicationError:
     elif code in _SCHEMA_CODES:
         error_type, retryable = TYPE_SCHEMA_REJECTED, False
     elif code is not None:
-        logger.warning("xmemory returned an unrecognized error code %r (HTTP %s)", code, status)
+        # Length, not the value: an unrecognized code is an unvetted server string,
+        # and worker logs travel. The server's own logs have the value.
+        logger.warning(
+            "xmemory returned an unrecognized error code (%d chars, HTTP %s); treating it as retryable",
+            len(code),
+            status,
+        )
+        error_type, retryable = TYPE_UNKNOWN, True
+    elif raw_code is not None:
+        # Present but not a usable identifier: treat like an unknown code, and let
+        # only the sanitized (absent) value reach history.
         error_type, retryable = TYPE_UNKNOWN, True
     else:
         # An API error with no structured code: a bare HTTP status or a wrapped

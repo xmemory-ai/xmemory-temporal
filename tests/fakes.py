@@ -65,6 +65,7 @@ class FakeXmemoryInstance:
         self._write_counter = 0
         self._fail_writes = 0
         self._fail_exc: BaseException | None = None
+        self._fail_status_exc: BaseException | None = None
         self._status_values: list[Any] = [WriteQueueStatus.COMPLETED]
         self._status_index = 0
         self._status_error_detail: str | None = None
@@ -74,6 +75,10 @@ class FakeXmemoryInstance:
     def fail_write_times(self, n: int, exc: BaseException) -> None:
         self._fail_writes = n
         self._fail_exc = exc
+
+    def fail_status_always(self, exc: BaseException) -> None:
+        """Every ``write_status`` raises, as a rate-limited backend would."""
+        self._fail_status_exc = exc
 
     def status_sequence(self, values: list[Any], *, error_detail: str | None = None) -> None:
         self._status_values = list(values)
@@ -99,6 +104,9 @@ class FakeXmemoryInstance:
         return _WriteStart(write_id=f"w{self._write_counter}")
 
     async def write_status(self, write_id: str, **kwargs: Any) -> _WriteStatus:
+        if self._fail_status_exc is not None:
+            self.calls.append(CallRecord("write_status", write_id, kwargs))
+            raise self._fail_status_exc
         self.calls.append(CallRecord("write_status", write_id, kwargs))
         value = self._status_values[min(self._status_index, len(self._status_values) - 1)]
         self._status_index += 1

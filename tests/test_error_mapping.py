@@ -116,6 +116,9 @@ def test_type_string_literals_are_pinned() -> None:
     assert errors.TYPE_WRITE_TIMEOUT == "XmemoryWriteTimeout"
     assert errors.TYPE_NOT_BOUND == "XmemoryNotBound"
     assert errors.TYPE_NO_DEADLINE == "XmemoryNoDeadline"
+    assert errors.TYPE_BAD_OPTIONS == "XmemoryBadOptions"
+    assert errors.TYPE_CLOCK_UNUSABLE == "XmemoryClockUnusable"
+    assert errors.TYPE_DEADLINE_EXPIRED == "XmemoryDeadlineExpired"
     assert errors.TYPE_UNKNOWN == "XmemoryUnknown"
 
 

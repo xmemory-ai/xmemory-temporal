@@ -1,20 +1,16 @@
 # Testing
 
-The test strategy is built around the question that decides whether a memory
-plugin is safe to run in production: **does a memory operation ever run twice —
-or fail to run — under retries and replay?** Everything below exists to answer
-that with evidence, not assertion.
+The suite answers one question with evidence: **does a memory operation ever run
+twice — or fail to run — under retries and replay?**
 
-Two principles shape the suite:
+Two principles shape it:
 
-- **No live backend by default.** Every test except the opt-in end-to-end one
-  injects a fake xmemory instance, so the suite is deterministic, fast, and
-  runnable offline (including in CI with no secrets). The fake is a call ledger,
-  which is what the replay-safety tests assert against.
-- **Real Temporal, skipped time.** Integration tests run an actual Temporal
-  worker against a time-skipping test server, so `workflow.sleep` and durable
-  poll loops that model a 15-minute write complete in milliseconds while still
-  exercising the real scheduling, activity, and replay machinery.
+- **No live backend by default.** Every test but the opt-in end-to-end one injects
+  a fake instance, so the suite runs offline and in CI with no secrets. The fake is
+  a call ledger, which is what the replay-safety tests assert against.
+- **Real Temporal, skipped time.** Integration tests run a real worker against a
+  time-skipping test server, so a 15-minute poll loop completes in milliseconds
+  while still exercising real scheduling, activity, and replay machinery.
 
 ## Test layers
 
@@ -43,8 +39,8 @@ Each module verified in isolation, no worker involved.
   worker and the plugin; call counts; the **at-most-once write default** and the
   **opt-in retry** path.
 - **`test_write_async_polling.py`** — the durable-write loop: polls to
-  completion, terminal `failed`, `not_found` grace window (tolerated on early
-  polls, terminal once it persists), and `max_wait` timeout — all in
+  completion, terminal `failed`, `not_found` (terminal on the first result,
+  since `write_async` is transactional), and `max_wait` timeout — all in
   milliseconds despite modeling a multi-minute write.
 - **`test_interceptor.py`** — auto-capture: projection, sampling (deterministic
   crc32 bucket), fail-open (a capture error never fails the wrapped activity),
@@ -52,18 +48,13 @@ Each module verified in isolation, no worker involved.
 
 ### 3. Replay safety
 
-- **`test_replay_side_effects.py`** — runs the worker with
-  `max_cached_workflows=0`, which evicts the workflow after every task and forces
-  a full replay from history. For the direct read/write workflows the **history
-  level** is the exact assertion — N logical operations produce exactly N
-  `ActivityTaskScheduled` events. Counting scheduled events is retry-independent:
-  each intended call is one scheduled event, regardless of retries or replays.
-  That comes with a **ledger-level** cross-check that the fake saw each write
-  once. For the durable-write workflow the poll loop makes the scheduled-event
-  total variable, so there the ledger's exact `write_async == 1` pins the single
-  enqueue and the history count is only a lower bound (`>= 1`). A deliberate
-  **sensitivity control** (a double-write workflow) proves the harness reports
-  *two* when there are two — so the "exactly one" assertions can actually fail.
+- **`test_replay_side_effects.py`** — runs with `max_cached_workflows=0`, evicting
+  the workflow after every task and forcing a full replay. For direct read/write
+  workflows the assertion is exact: N logical operations produce N
+  `ActivityTaskScheduled` events, a count that is retry-independent. The durable
+  workflow's poll loop makes that total variable, so there the ledger's
+  `write_async == 1` pins the single enqueue instead. A double-write control proves
+  the harness reports two when there are two, so "exactly one" can actually fail.
 
 ### 4. Replayer
 
@@ -71,6 +62,14 @@ Each module verified in isolation, no worker involved.
   environment and replays it with `Replayer`, catching nondeterminism within a
   run. A representative checked-in history corpus (to catch a future build
   breaking replay of a *past* one) is a documented follow-up.
+
+> **Replay across builds.** `test_replayer.py` records and replays within one
+> build, which catches nondeterminism inside a version but not between them.
+> `write_durable` polls from the *caller's* workflow, so its command sequence is
+> part of their history: changing the loop breaks an execution already in flight.
+> That is safe only because nothing has been released yet. From the first release
+> on, any change to the loop needs `workflow.patched(...)`, the old branch kept,
+> and a checked-in history to replay against.
 
 ### 5. End-to-end (live)
 
@@ -81,13 +80,10 @@ Each module verified in isolation, no worker involved.
 
 ## The injected fake
 
-`tests/fakes.py::FakeXmemoryInstance` implements the same narrow protocol the
-plugin depends on and records every call as a `CallRecord`. It is scriptable
-(`fail_write_times(n, exc)`, `status_sequence([...])`) and is the replay test's
-call ledger: the exact `ActivityTaskScheduled` event count is authoritative for
-the direct read/write workflows, while the ledger's own counts pin the
-durable-write enqueue (`write_async == 1`). Because the instance is *injected*
-through the plugin, no test needs monkeypatching.
+`tests/fakes.py::FakeXmemoryInstance` implements the protocol the plugin depends on
+and records every call. It is scriptable (`fail_write_times(n, exc)`,
+`status_sequence([...])`) and serves as the replay tests' ledger. Because the
+instance is injected through the plugin, no test needs monkeypatching.
 
 ## Running the tests
 
@@ -129,15 +125,11 @@ uv run python examples/run_workflow.py
 #   agent recalled: {'answer': 'Prefers email over phone calls.'}
 ```
 
-The workflow does a `write_durable` and then reads the fact back, so a successful
-run exercises the plugin, the client, and the durable poll loop against a real
-backend. Inspect the run in the Temporal UI to check that activity summaries
-render legibly.
+The workflow writes durably and reads the fact back, so a successful run exercises
+the plugin, the client, and the poll loop against a real backend.
 
-**The durability demo.** The whole value proposition is that a durable write
-survives worker death, so also **kill the worker mid-`write_durable` and restart
-it**: the poll loop must resume from history and complete rather than restarting
-the write.
+**The durability demo.** Kill the worker mid-`write_durable` and restart it: the
+poll loop must resume from history and complete, not restart the write.
 
 ## Continuous integration
 
@@ -151,5 +143,42 @@ protection before any release. Every leg runs:
    `XMEM_API_KEY` / `XMEM_INSTANCE_ID` `skipif` in `test_e2e_live.py`; it runs
    when those are exported.
 
+The release workflow re-runs all three, then checks that the git tag matches
+`pyproject.toml`, that both artifacts pass `twine check --strict`, and that
+`LICENSE` and `NOTICE` are actually in them.
+
 > `examples/` is deliberately included in lint/type-check — the examples are the
 > advertised migration story, so a broken one fails the gate rather than shipping.
+
+## Clock assumptions
+
+Deadlines are measured from a monotonic stamp taken by the plugin's outermost
+interceptor, plus `started_time` for what Temporal did before it — payload decoding
+and Client-carried interceptors. That reading crosses clock domains, so:
+
+* Clock **ahead** of the service, or agreeing: pre-interceptor time is
+  `now - started_time` minus the stamp, and can only shorten the budget.
+* Clock **behind** the service: the figure goes negative, which is impossible, so
+  the time is real but unmeasurable. The activity fails with retryable
+  `XmemoryClockUnusable` rather than guess — a reserve that under-shoots lets the
+  client outlive the activity and duplicate a write. A worker with a synced clock
+  can run the attempt.
+
+**How much of a Client-carried interceptor is charged is not deterministic.**
+`started_time` is the service's record of when the attempt began, and it can be
+stamped partway through such an interceptor's work. Measured against a 2s
+interceptor, the charge ranged from 2.00s (most runs) down to 0.80s under load. So
+this is a best-effort improvement, not a guarantee, and the client margin covers the
+remainder — which is why there is no test asserting a particular charge for that
+case. The arithmetic itself is pinned by unit tests that supply `started_time`
+directly, and an interceptor registered on the *worker* — inside our stamp — is
+charged deterministically and is tested that way.
+
+Keep worker clocks in NTP sync. The one exception is why
+`XmemoryConfig(allow_unmeasurable_clock=True)` exists: the time-skipping test
+server advances the service clock past the worker's whenever a timer is skipped,
+which looks exactly like a worker clock that is behind. The time-skipping tests set
+that flag; the `local_env` tests do not, so the strict path stays covered.
+
+The TypeScript port cannot do this — its SDK exposes no attempt-start timestamp, so
+it reserves a capped allowance instead. See that repository's TESTING.md.
