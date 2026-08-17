@@ -12,6 +12,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from xmemory_temporal.config import XmemoryConfig, client_timeout_seconds
+from xmemory_temporal.deadline import attempt_clock_unusable, remaining_budget_seconds
 from xmemory_temporal.dto import (
     ReadInput,
     ReadOutput,
@@ -25,7 +26,14 @@ from xmemory_temporal.dto import (
     project_write_start,
     project_write_status,
 )
-from xmemory_temporal.errors import TYPE_NO_DEADLINE, TYPE_NOT_BOUND, to_application_error
+from xmemory_temporal.errors import (
+    TYPE_BAD_OPTIONS,
+    TYPE_CLOCK_UNUSABLE,
+    TYPE_DEADLINE_EXPIRED,
+    TYPE_NO_DEADLINE,
+    TYPE_NOT_BOUND,
+    to_application_error,
+)
 from xmemory_temporal.protocol import XmemoryInstanceProtocol
 
 # Pinned so renaming a method cannot break replay of in-flight workflows.
@@ -34,9 +42,8 @@ ACTIVITY_WRITE = "xmemory_write"
 ACTIVITY_WRITE_START = "xmemory_write_start"
 ACTIVITY_WRITE_STATUS = "xmemory_write_status"
 
-# A ContextVar, not an attribute: one plugin object is shared across every Worker
-# built from a Client, so an attribute would be last-bind-wins and a Worker could
-# reach another's closed client. Each Worker's run_context binds its own.
+# A ContextVar, not an attribute: one plugin object can serve several workers, and
+# an attribute would be last-bind-wins. Each worker's run_context binds its own.
 _bound_instance: contextvars.ContextVar[XmemoryInstanceProtocol | None] = contextvars.ContextVar(
     "xmemory_bound_instance", default=None
 )
@@ -61,8 +68,7 @@ class XmemoryActivities:
     def instance(self) -> XmemoryInstanceProtocol:
         inst = _bound_instance.get()
         if inst is None:
-            # Activities registered without the plugin. Non-retryable: no retry
-            # can bind a client.
+            # Registered without the plugin; no retry can bind a client.
             raise ApplicationError(
                 "xmemory activities are not bound to a client — register XmemoryPlugin on the "
                 "Client (the Worker inherits it) rather than registering the activity functions "
@@ -85,15 +91,35 @@ class XmemoryActivities:
         design exists to avoid.
         """
         info = activity.info()
-        budget = info.start_to_close_timeout or info.schedule_to_close_timeout
-        if budget is None:
+        if attempt_clock_unusable(info) and not self._config.allow_unmeasurable_clock:
+            # Refuse rather than guess. The time Temporal spent before our
+            # interceptor cannot be measured against a worker clock that reads
+            # behind the service, and any substitute could let the client outlive
+            # the activity and duplicate a write on retry.
+            raise ApplicationError(
+                f"activity {info.activity_type} cannot be timed: this worker's clock reads behind the "
+                f"service, so the deadline already spent is unmeasurable. Sync the worker clock (NTP).",
+                type=TYPE_CLOCK_UNUSABLE,
+            )
+        # No explicit elapsed: the helper reads the stamp the plugin's outermost
+        # interceptor took, so whatever ran before this function counts too.
+        remaining = remaining_budget_seconds(info, allow_unmeasurable=self._config.allow_unmeasurable_clock)
+        if remaining is None:
             raise ApplicationError(
                 f"activity {info.activity_type} was scheduled without a deadline: set "
                 "start_to_close_timeout or schedule_to_close_timeout on it.",
                 type=TYPE_NO_DEADLINE,
                 non_retryable=True,
             )
-        return client_timeout_seconds(budget.total_seconds(), self._config.client_margin_seconds)
+        if remaining <= 0:
+            # Temporal has already given up on this attempt. Rounding the
+            # remainder up to a token budget would send a request whose result
+            # nobody will read, and for a write the server could still accept it.
+            raise ApplicationError(
+                f"activity {info.activity_type} is past its deadline",
+                type=TYPE_DEADLINE_EXPIRED,
+            )
+        return client_timeout_seconds(remaining, self._config.client_margin_seconds)
 
     @activity.defn(name=ACTIVITY_READ)
     async def read(self, request: ReadInput) -> ReadOutput:
@@ -130,6 +156,7 @@ class XmemoryActivities:
     async def write(self, request: WriteInput) -> WriteOutput:
         instance = self.instance
         timeout = self._client_timeout()
+        self._reject_empty_mutations(request)
         try:
             result = await instance.write(
                 request.text,
@@ -144,6 +171,7 @@ class XmemoryActivities:
     async def write_start(self, request: WriteInput) -> WriteStartOutput:
         instance = self.instance
         timeout = self._client_timeout()
+        self._reject_empty_mutations(request)
         try:
             result = await instance.write_async(
                 request.text,
@@ -165,7 +193,37 @@ class XmemoryActivities:
             )
         except Exception as exc:
             raise to_application_error(exc) from None
+        detail = getattr(result, "error_detail", None)
+        if detail:
+            # Never the return value: history keeps activity results in the clear.
+            # And not verbatim in the log either unless asked for, since the detail
+            # is not promised user-safe and logs travel. What is always safe to
+            # record is which write failed and how much detail there was.
+            if self._config.log_server_error_detail:
+                activity.logger.warning("xmemory write %s failed: %s", request.write_id, detail)
+            else:
+                activity.logger.warning(
+                    "xmemory write %s failed; the server sent %d characters of detail, withheld from the log "
+                    "and from workflow history (set log_server_error_detail=True to include it)",
+                    request.write_id,
+                    len(str(detail)),
+                )
         return project_write_status(result)
+
+    @staticmethod
+    def _reject_empty_mutations(request: WriteInput) -> None:
+        """Refuse an empty mutation list before any request goes out.
+
+        The client answers it with a plain exception, which the mapper can only read
+        as retryable -- so Temporal would keep retrying a request that cannot succeed.
+        Called outside the try blocks, whose handler would remap this verdict.
+        """
+        if request.structured_mutations is not None and len(request.structured_mutations) == 0:
+            raise ApplicationError(
+                "xmemory write was given an empty structured_mutations list; omit it to write text instead",
+                type=TYPE_BAD_OPTIONS,
+                non_retryable=True,
+            )
 
     def _write_kwargs(self, request: WriteInput) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}

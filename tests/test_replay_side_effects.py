@@ -53,7 +53,7 @@ async def _run_replayed(env: WorkflowEnvironment, fake: FakeXmemoryInstance, wor
         env.client,
         task_queue=tq,
         workflows=[workflow],
-        plugins=[XmemoryPlugin(XmemoryConfig(instance_id="inst-1"), instance=fake)],
+        plugins=[XmemoryPlugin(XmemoryConfig(instance_id="inst-1", allow_unmeasurable_clock=True), instance=fake)],
         max_cached_workflows=0,  # force replay from history on every task
     ):
         wf_id = f"wf-{uuid.uuid4()}"
