@@ -1,0 +1,9 @@
+# The sdist is the package, not the suite. setuptools auto-includes files matching
+# `test*`, which shipped `tests/test_*.py` without their conftest, fakes, and
+# workflow fixtures -- an artifact whose tests could only fail to collect. The
+# suite lives in git, where it has everything it needs.
+prune tests
+prune examples
+prune .github
+prune docs
+exclude .gitignore
