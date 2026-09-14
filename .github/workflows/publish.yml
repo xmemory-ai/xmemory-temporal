@@ -1,34 +1,56 @@
 name: publish
 
-# Publishes xmemory-temporal to PyPI when a GitHub Release is published.
-# No token is required today — add one before the first release (see below).
+# Publishes xmemory-temporal to PyPI. Start it from the Actions tab: publish → Run
+# workflow, on `main`. The version comes from pyproject.toml, so bump it (and
+# uv.lock) in a PR first. Once PyPI has the files, the commit is tagged
+# v<version> and a GitHub Release is created with generated notes.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# One release at a time: a second run queues instead of racing the first to the tag.
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   # Everything that runs repository code runs here, with no id-token and no
   # publishing credentials: a compromised dependency or test cannot reach either.
   verify:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           python-version: "3.12"
           # Without this the action installs whatever uv is newest, so two runs of
-          # the same tag can build with different tooling.
+          # the same commit can build with different tooling.
           version: "0.9.13"
-      - name: Check the release tag matches pyproject
-        # A mismatch here publishes a version nobody tagged, or fails after the
-        # release is already announced.
+      - name: Check the run is on main
+        # "Run workflow" accepts any branch or tag, and only main is released.
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          pkg="$(uv run --no-project python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
-          test "$tag" = "$pkg" || { echo "tag $tag != package version $pkg"; exit 1; }
+          test "$GITHUB_REF" = refs/heads/main || {
+            echo "refusing to publish from $GITHUB_REF: run this workflow on main"; exit 1; }
+      - name: Read the version
+        id: version
+        run: |
+          version="$(uv run --no-project python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Check the version is not released yet
+        # PyPI accepts a version only once, so stop now rather than after the
+        # deployment is approved.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tagged="$(git ls-remote --tags origin "refs/tags/v$VERSION")"
+          test -z "$tagged" || { echo "v$VERSION is already tagged: bump the version first"; exit 1; }
+          status="$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/xmemory-temporal/$VERSION/json")"
+          test "$status" = 404 || {
+            echo "PyPI answered $status for xmemory-temporal $VERSION, not 404: already published, or PyPI is unreachable"; exit 1; }
       - name: Install (locked)
         # --locked, or a drifted lockfile would silently resolve to versions the
         # release was never tested against.
@@ -83,11 +105,12 @@ jobs:
   publish:
     needs: verify
     runs-on: ubuntu-latest
-    # Configure this environment's protection rules / Trusted Publishing on PyPI.
+    # Needs a reviewer's approval. PyPI's trusted publisher names this environment,
+    # this repository and this workflow file, so renaming any of them breaks publishing.
     environment: pypi
     permissions:
       contents: read
-      id-token: write # PEP 740 attestations (provenance) + optional Trusted Publishing
+      id-token: write # Trusted Publishing + PEP 740 attestations (provenance)
     steps:
       - name: Download the verified artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -95,13 +118,23 @@ jobs:
           name: dist
           path: dist/
       - name: Publish to PyPI
+        # Trusted Publishing, so no token is stored. Do not add a `password:`: the
+        # action would use it instead and stop producing attestations.
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          # TOKEN: set the PYPI_API_TOKEN secret before the first release.
-          #
-          # Prefer Trusted Publishing: configure it for this repo + the `pypi`
-          # environment and DELETE the `password:` line. OIDC then authenticates with
-          # no stored token AND attestations are produced — this action *disables*
-          # PEP 740 attestations whenever a password/token is supplied, so the
-          # `id-token: write` permission below buys nothing in this mode.
-          password: ${{ secrets.PYPI_API_TOKEN }}
+
+  # Runs only after PyPI has the files, so a failed upload leaves no tag behind. If
+  # this job alone fails, use "Re-run failed jobs": a new run stops at the
+  # not-released check, because PyPI already has the version.
+  release:
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Tag the commit and create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "v$VERSION" --generate-notes
