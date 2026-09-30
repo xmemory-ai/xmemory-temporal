@@ -1,0 +1,36 @@
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+    groups:
+      all-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Batch advisory-driven security fixes into a single PR instead of one
+      # per vulnerable dependency. Security updates ignore update-types, so a
+      # fix that requires a major bump is still grouped here.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+    ignore:
+      - dependency-name: "*"
+        # Ignore major version updates
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+    groups:
+      all-actions:
+        patterns:
+          - "*"
