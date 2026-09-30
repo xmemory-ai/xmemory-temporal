@@ -1,6 +1,6 @@
 [project]
 name = "xmemory-temporal"
-version = "1.0.0"
+version = "1.1.0"
 description = "Temporal plugin for xmemory — durable agent memory as Temporal Activities"
 readme = "README.md"
 requires-python = ">=3.10"
