@@ -1,6 +1,7 @@
 """Config: credential sourcing and the no-secret-in-history guarantee."""
 
 import pytest
+from pydantic import ValidationError
 
 from xmemory_temporal import XmemoryConfig
 
@@ -36,7 +37,7 @@ def test_missing_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_frozen() -> None:
     cfg = XmemoryConfig(instance_id="inst-1")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError, match="frozen"):
         cfg.instance_id = "other"  # type: ignore[misc]
 
 

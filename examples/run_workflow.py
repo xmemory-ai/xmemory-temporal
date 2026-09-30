@@ -4,9 +4,8 @@ import asyncio
 import os
 import uuid
 
-from temporalio.client import Client
-
 from agent_workflow import TASK_QUEUE, SupportAgentWorkflow
+from temporalio.client import Client
 
 
 async def main() -> None:
