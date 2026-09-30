@@ -37,7 +37,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["setuptools==80.9.0"]  # pinned: an isolated build otherwise resolves whatever is newest
+requires = ["setuptools==80.10.2"]  # pinned: an isolated build otherwise resolves whatever is newest
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
