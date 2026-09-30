@@ -6,7 +6,8 @@ so these are plain ``async def`` with no thread pool.
 """
 
 import contextvars
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -119,7 +120,7 @@ class XmemoryActivities:
                 timeout=timeout,
                 **kwargs,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - every client error is sanitized into an ApplicationError
             # `from None`, not `from exc`: Temporal serializes the cause chain
             # into cleartext history and the client's message is unsanitized.
             # Only `from None` suppresses the implicit __context__ too.
@@ -136,7 +137,7 @@ class XmemoryActivities:
                 timeout=timeout,
                 **self._write_kwargs(request),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - every client error is sanitized into an ApplicationError
             raise to_application_error(exc) from None
         return project_write(result)
 
@@ -150,7 +151,7 @@ class XmemoryActivities:
                 timeout=timeout,
                 **self._write_kwargs(request),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - every client error is sanitized into an ApplicationError
             raise to_application_error(exc) from None
         return project_write_start(result)
 
@@ -163,7 +164,7 @@ class XmemoryActivities:
                 request.write_id,
                 timeout=timeout,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - every client error is sanitized into an ApplicationError
             raise to_application_error(exc) from None
         return project_write_status(result)
 

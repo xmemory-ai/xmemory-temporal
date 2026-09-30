@@ -8,7 +8,7 @@ letting the two silently diverge.
 """
 
 import inspect
-from typing import Callable
+from collections.abc import Callable
 
 from xmemory._instance import AsyncInstanceAPI  # type: ignore[import-not-found]
 

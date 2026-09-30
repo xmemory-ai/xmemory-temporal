@@ -18,12 +18,11 @@ and, in another terminal, ``python examples/run_workflow.py`` to drive it.
 import asyncio
 import os
 
+from agent_workflow import TASK_QUEUE, SupportAgentWorkflow
 from temporalio.client import Client
 from temporalio.worker import Worker
 
 from xmemory_temporal import XmemoryConfig, XmemoryPlugin
-
-from agent_workflow import TASK_QUEUE, SupportAgentWorkflow
 
 
 async def main() -> None:

@@ -17,10 +17,9 @@ import asyncio
 import logging
 import time
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
-
-from typing_extensions import override
+from typing import Any
 
 from temporalio import activity
 from temporalio.worker import (
@@ -28,6 +27,7 @@ from temporalio.worker import (
     ExecuteActivityInput,
     Interceptor,
 )
+from typing_extensions import override
 
 from xmemory_temporal.config import XmemoryConfig
 from xmemory_temporal.dto import WriteInput
