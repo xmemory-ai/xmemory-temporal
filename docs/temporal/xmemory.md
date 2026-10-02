@@ -142,6 +142,8 @@ xmemory errors become `ApplicationError`s with stable `type` strings you can mat
 
 The durable-write loop adds `XmemoryWriteFailed`, `XmemoryWriteNotFound`, and `XmemoryWriteTimeout`, all non-retryable.
 
+When the language-model provider behind xmemory refuses the service's own credentials, account or endpoint, a write fails with `SERVICE_UNAVAILABLE` (`XmemoryServerError`, retryable), not a final `INVALID_INPUT`: nothing in your input can fix it, and the write succeeds once the service is reconfigured. A durable write that fails this way still raises `XmemoryWriteFailed`.
+
 ## Keep credentials and sensitive text out of history
 
 The config carries the name of the environment variable holding your API key, never the key itself, so nothing secret is serialized into Activity arguments, which Temporal persists in the clear. Your memory text and queries, however, are Activity inputs and are stored in cleartext Workflow history — install a Temporal [Payload Codec](/develop/python/converters-and-encryption) if that content is sensitive.
