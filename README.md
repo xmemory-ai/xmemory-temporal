@@ -238,6 +238,17 @@ that crashed on a newer server's code would break during rolling deploys.
 > **Note.** 402 means `QUOTA_EXCEEDED` only. `TRIAL_ENDED` was removed from the
 > xmemory contract when trials were retired end-to-end; do not rely on it.
 
+**When the model provider refuses xmemory's own access** (server release, October 2026). If
+the language-model provider behind xmemory rejects the service's credentials, account or
+endpoint (the provider's own 401, 402, 403 or 404, or an invalid API key; not the xmemory
+402 in the note above), a write now fails with `SERVICE_UNAVAILABLE`, mapped to
+`XmemoryServerError` and retryable. It used to fail as a final `INVALID_INPUT`
+(`XmemoryBadRequest`) telling you to simplify the schema, which was wrong advice: nothing in
+the input can fix it, and the same write succeeds once the service is reconfigured. A sync
+write makes one attempt by default, so set `write_retry_policy` (for example `write_retry_policy=RetryPolicy(maximum_attempts=3)`) to ride it out. A
+durable write that fails this way still reports `failed` and raises `XmemoryWriteFailed`,
+non-retryable, like any other failed write. No client upgrade is needed.
+
 ## Auto-capture (opt-in)
 
 ```python
